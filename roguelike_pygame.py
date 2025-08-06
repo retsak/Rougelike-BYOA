@@ -99,6 +99,7 @@ def wrap_text(text, font, max_width):
 running = True
 waiting = False
 waiting_dots = 0
+pending_command = None  # Holds command to process after waiting indicator is shown
 while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -106,26 +107,9 @@ while running:
         elif event.type == pygame.KEYDOWN and input_active:
             if event.key == pygame.K_RETURN:
                 if input_text.strip():
+                    pending_command = input_text.strip()
                     waiting = True
                     waiting_dots = 0
-                    try:
-                        import io
-                        import contextlib
-                        buf = io.StringIO()
-                        with contextlib.redirect_stdout(buf):
-                            state = handle_command(input_text.strip(), state, "gpt-4.1-mini", None)
-                        narrative = buf.getvalue().strip()
-                        output_lines.append(f"> {input_text.strip()}")
-                        if narrative:
-                            for para in narrative.split('\n'):
-                                for line in wrap_text(para, output_font, output_area.width-32):
-                                    output_lines.append(line)
-                    except Exception as e:
-                        output_lines.append(f"Error: {e}")
-                    # Limit history
-                    output_lines = output_lines[-output_history_limit:]
-                    output_scroll = 0  # Reset scroll to bottom
-                    waiting = False
                 input_text = ""
             elif event.key == pygame.K_BACKSPACE:
                 input_text = input_text[:-1]
@@ -163,6 +147,12 @@ while running:
         color = GREEN if room["type"] == "shrine" else YELLOW if room["type"] == "treasure" else RED if room["enemies"] else GRAY if room["visited"] else BLACK
         pygame.draw.rect(screen, color, rect, border_radius=18)
         pygame.draw.rect(screen, ROOM_BORDER, rect, 3, border_radius=18)
+        # Draw enemy marker if enemies present
+        if room["enemies"]:
+            ex, ey = x*CELL_SIZE + CELL_SIZE//2, y*CELL_SIZE + CELL_SIZE//2
+            pygame.draw.circle(screen, (220, 60, 60), (ex, ey), 18)
+            e_txt = output_font.render("E", True, (255,255,255))
+            screen.blit(e_txt, (ex - e_txt.get_width()//2, ey - e_txt.get_height()//2))
     # Draw player with glow
     px, py = state.rooms[state.player.location]["coords"]
     prect = pygame.Rect(px*CELL_SIZE+28, py*CELL_SIZE+28, CELL_SIZE-56, CELL_SIZE-56)
@@ -203,7 +193,8 @@ while running:
     cursor_height = txt_surface.get_height()
     if (pygame.time.get_ticks() // 500) % 2 == 0:  # Blinking cursor
         pygame.draw.line(screen, input_text_color, (cursor_x, cursor_y), (cursor_x, cursor_y + cursor_height), 3)
-    # Draw stats panel
+
+    # --- Stats Panel ---
     pygame.draw.rect(screen, (28, 28, 40), stats_panel)
     pygame.draw.rect(screen, ROOM_BORDER, stats_panel, 3)
     stats_y = 24
@@ -224,8 +215,71 @@ while running:
         txt = output_font.render(line, True, (220, 220, 255))
         screen.blit(txt, (stats_x, stats_y))
         stats_y += 32
+    # Draw legend at the bottom of the stats panel (draw upward to avoid cutoff)
+    legend_lines = [
+        "Legend:",
+        "EN = Enemy room",
+        "TR = Treasure",
+        "SH = Shrine",
+        "BO = Boss",
+        "LO = Locked",
+        "CO = Corridor",
+        "TRP = Trap",
+        "E (red) = Enemy present",
+        "@ = You (player)",
+    ]
+    legend_line_height = 22  # Slightly smaller spacing for legend
+    legend_y = stats_panel.bottom - 24 - legend_line_height * (len(legend_lines) - 1)
+    for line in legend_lines:
+        txt = output_font.render(line, True, (180, 220, 180))
+        screen.blit(txt, (stats_x, legend_y))
+        legend_y += legend_line_height
+
+    # Draw Send button after stats panel so it's always visible
+    send_btn_width, send_btn_height = 90, 44
+    send_btn_rect = pygame.Rect(input_box.right - send_btn_width - 16, input_box.y + 10, send_btn_width, send_btn_height)
+    # If the send button would overlap the stats panel, move it left
+    if send_btn_rect.right > stats_panel.left - 8:
+        send_btn_rect.right = stats_panel.left - 8
+        send_btn_rect.x = send_btn_rect.right - send_btn_width
+    pygame.draw.rect(screen, (60, 120, 60), send_btn_rect, border_radius=10)
+    pygame.draw.rect(screen, (120, 200, 120), send_btn_rect, 2, border_radius=10)
+    send_txt = font.render("Send", True, (255,255,255))
+    screen.blit(send_txt, (send_btn_rect.centerx - send_txt.get_width()//2, send_btn_rect.centery - send_txt.get_height()//2))
 
     pygame.display.flip()
+
+    # Handle Send button click
+    if pygame.mouse.get_pressed()[0]:
+        mx, my = pygame.mouse.get_pos()
+        if send_btn_rect.collidepoint(mx, my) and input_active and input_text.strip():
+            pending_command = input_text.strip()
+            waiting = True
+            waiting_dots = 0
+            input_text = ""
+        while pygame.mouse.get_pressed()[0]:
+            pygame.event.pump()
+
+    # Process pending command after waiting indicator is shown
+    if waiting and pending_command:
+        try:
+            import io
+            import contextlib
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                state = handle_command(pending_command, state, "gpt-4.1-mini", None)
+            narrative = buf.getvalue().strip()
+            output_lines.append(f"> {pending_command}")
+            if narrative:
+                for para in narrative.split('\n'):
+                    for line in wrap_text(para, output_font, output_area.width-32):
+                        output_lines.append(line)
+        except Exception as e:
+            output_lines.append(f"Error: {e}")
+        output_lines = output_lines[-output_history_limit:]
+        output_scroll = 0
+        waiting = False
+        pending_command = None
 
 pygame.quit()
 sys.exit()
