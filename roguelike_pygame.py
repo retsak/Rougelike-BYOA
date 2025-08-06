@@ -9,11 +9,34 @@ import os
 pygame.init()
 CELL_SIZE = 120  # Even larger
 GRID_W, GRID_H = 6, 6
-WIDTH, HEIGHT = CELL_SIZE * GRID_W + 80 + 320, CELL_SIZE * GRID_H + 400  # More width and height
+STATUS_BAR_HEIGHT = 40
+WIDTH, HEIGHT = CELL_SIZE * GRID_W + 80 + 320, CELL_SIZE * GRID_H + 400 + STATUS_BAR_HEIGHT  # Add status bar height
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("DungeonGPT Roguelike")
 font = pygame.font.SysFont(None, 36)  # Larger font
 output_font = pygame.font.SysFont(None, 28)
+
+# --- Load Enemy Sprites ---
+def load_enemy_sprites():
+    sprite_dict = {}
+    # Load basic enemy sprites
+    basic_path = 'assets/basic enemies'
+    for fname in os.listdir(basic_path):
+        if fname.lower().endswith('.png'):
+            img = pygame.image.load(os.path.join(basic_path, fname)).convert_alpha()
+            img = pygame.transform.smoothscale(img, (48, 48))
+            sprite_dict[fname[:-4]] = img  # key is filename without .png
+    # Load boss enemy sprites
+    boss_path = 'assets/bosses'
+    if os.path.exists(boss_path):
+        for fname in os.listdir(boss_path):
+            if fname.lower().endswith('.png'):
+                img = pygame.image.load(os.path.join(boss_path, fname)).convert_alpha()
+                img = pygame.transform.smoothscale(img, (64, 64))
+                sprite_dict[fname[:-4]] = img
+    return sprite_dict
+
+enemy_sprites = load_enemy_sprites()
 
 # --- Dungeon Generation ---
 def generate_grid_dungeon(seed: int, grid_w: int = 6, grid_h: int = 6) -> dict:
@@ -34,13 +57,25 @@ def generate_grid_dungeon(seed: int, grid_w: int = 6, grid_h: int = 6) -> dict:
             }
             if r_type in {"enemy_lair", "corridor"} and random.random() < 0.6:
                 name = random.choice(list(ENEMIES)[:-1])
-                rooms[room_id]["enemies"].append({**ENEMIES[name], "name": name})
+                enemy = {**ENEMIES[name], "name": name}
+                sprite_keys = [k for k in enemy_sprites if name in k]
+                if sprite_keys:
+                    enemy['sprite'] = random.choice(sprite_keys)
+                else:
+                    enemy['sprite'] = None
+                rooms[room_id]["enemies"].append(enemy)
             if random.random() < 0.5:
                 rooms[room_id]["items"].append(random.choice(LOOT_TABLE))
     # Place boss room at farthest cell
     boss_room = f"room_{grid_w*grid_h-1}"
     rooms[boss_room]["type"] = "boss_room"
-    rooms[boss_room]["enemies"] = [{**ENEMIES["dungeon_boss"], "name": "dungeon_boss"}]
+    boss_enemy = {**ENEMIES["dungeon_boss"], "name": "dungeon_boss"}
+    boss_sprite_keys = [k for k in enemy_sprites if "boss" in k or "dungeon_boss" in k]
+    if boss_sprite_keys:
+        boss_enemy['sprite'] = random.choice(boss_sprite_keys)
+    else:
+        boss_enemy['sprite'] = None
+    rooms[boss_room]["enemies"] = [boss_enemy]
     return rooms
 
 # --- Game State ---
@@ -68,7 +103,7 @@ stats_panel = pygame.Rect(CELL_SIZE * GRID_W + 80, 0, STATS_PANEL_WIDTH, HEIGHT)
 input_text = ""
 input_active = True
 input_box_width = stats_panel.left - 8  # Leave margin before stats panel
-input_box = pygame.Rect(0, HEIGHT-64, input_box_width, 64)  # Adjusted width
+input_box = pygame.Rect(0, HEIGHT-STATUS_BAR_HEIGHT-64, input_box_width, 64)  # Adjusted to sit above status bar
 input_color = (30, 30, 30)
 input_text_color = (200, 255, 200)
 
@@ -78,7 +113,8 @@ max_output_lines = 12  # Number of lines visible at once
 output_history_limit = 200  # Total lines to keep for scrolling
 output_scroll = 0  # Scroll offset
 output_area_width = stats_panel.left - 8  # Match input box width
-output_area = pygame.Rect(0, HEIGHT-64-320, output_area_width, 320)  # Make output area taller
+output_area_height = int(320 * 0.9)
+output_area = pygame.Rect(0, HEIGHT-STATUS_BAR_HEIGHT-64-output_area_height, output_area_width, output_area_height)  # Make output area 10% shorter
 output_color = (20, 20, 20)
 output_text_color = (255, 255, 180)
 
@@ -98,28 +134,6 @@ def wrap_text(text, font, max_width):
     if current:
         lines.append(current)
     return lines
-
-# --- Load Enemy Sprites ---
-def load_enemy_sprites():
-    sprite_dict = {}
-    # Load basic enemy sprites
-    basic_path = 'assets/basic enemies'
-    for fname in os.listdir(basic_path):
-        if fname.lower().endswith('.png'):
-            img = pygame.image.load(os.path.join(basic_path, fname)).convert_alpha()
-            img = pygame.transform.smoothscale(img, (48, 48))
-            sprite_dict[fname[:-4]] = img  # key is filename without .png
-    # Load boss enemy sprites
-    boss_path = 'assets/bosses'
-    if os.path.exists(boss_path):
-        for fname in os.listdir(boss_path):
-            if fname.lower().endswith('.png'):
-                img = pygame.image.load(os.path.join(boss_path, fname)).convert_alpha()
-                img = pygame.transform.smoothscale(img, (64, 64))
-                sprite_dict[fname[:-4]] = img
-    return sprite_dict
-
-enemy_sprites = load_enemy_sprites()
 
 # --- Load Hero Sprites ---
 def load_hero_sprites():
@@ -327,9 +341,20 @@ while running:
     else:
         pygame.draw.ellipse(screen, BLUE, prect)
     # Draw room type text
+    type_abbr = {
+        "enemy_lair": "EN",
+        "treasure": "TR",
+        "shrine": "SH",
+        "boss_room": "BO",
+        "locked": "LO",
+        "corridor": "CO",
+        "trap": "TRP",
+        "entrance": "EN"
+    }
     for room in state.rooms.values():
         x, y = room["coords"]
-        label = font.render(room["type"][:2].upper(), True, WHITE)
+        abbr = type_abbr.get(room["type"], room["type"][:2].upper())
+        label = font.render(abbr, True, WHITE)
         screen.blit(label, (x*CELL_SIZE+20, y*CELL_SIZE+20))
     # Draw output area with border
     pygame.draw.rect(screen, output_color, output_area, border_radius=12)
@@ -344,11 +369,6 @@ while running:
         scroll_bar_height = max(32, int(max_output_lines / len(output_lines) * output_area.height))
         scroll_bar_y = int(output_area.y + (output_scroll / max(1, len(output_lines) - max_output_lines)) * (output_area.height - scroll_bar_height))
         pygame.draw.rect(screen, (100, 100, 160), (output_area.right - 12, scroll_bar_y, 8, scroll_bar_height), border_radius=4)
-    # Draw waiting indicator if needed
-    if waiting:
-        dots = '.' * ((pygame.time.get_ticks() // 400) % 4)
-        wait_txt = output_font.render(f"Waiting for Dungeon Master{dots}", True, (180, 180, 255))
-        screen.blit(wait_txt, (output_area.x+16, output_area.y+12 + (max_output_lines-1)*24))
     # Draw input box with border
     pygame.draw.rect(screen, input_color, input_box, border_radius=12)
     pygame.draw.rect(screen, ROOM_BORDER, input_box, 2, border_radius=12)
@@ -360,6 +380,17 @@ while running:
     cursor_height = txt_surface.get_height()
     if (pygame.time.get_ticks() // 500) % 2 == 0:  # Blinking cursor
         pygame.draw.line(screen, input_text_color, (cursor_x, cursor_y), (cursor_x, cursor_y + cursor_height), 3)
+
+    # --- Status Bar ---
+    status_bar_rect = pygame.Rect(0, HEIGHT-STATUS_BAR_HEIGHT, WIDTH, STATUS_BAR_HEIGHT)
+    pygame.draw.rect(screen, (30, 30, 50), status_bar_rect, border_radius=8)
+    pygame.draw.rect(screen, ROOM_BORDER, status_bar_rect, 2, border_radius=8)
+    if waiting:
+        dots = '.' * ((pygame.time.get_ticks() // 400) % 4)
+        wait_txt = output_font.render(f"Waiting for Dungeon Master{dots}", True, (180, 180, 255))
+        txt_x = status_bar_rect.x+16
+        txt_y = status_bar_rect.y + (STATUS_BAR_HEIGHT - wait_txt.get_height()) // 2
+        screen.blit(wait_txt, (txt_x, txt_y))
 
     # --- Stats Panel ---
     pygame.draw.rect(screen, (28, 28, 40), stats_panel)
@@ -441,16 +472,22 @@ while running:
                 for para in narrative.split('\n'):
                     for line in wrap_text(para, output_font, output_area.width-32):
                         output_lines.append(line)
+            # --- Parse options for battle dialog ---
+            options = []
+            for line in narrative.split('\n'):
+                if line.strip().startswith(tuple(str(i)+'.' for i in range(1,10))):
+                    options.append(line.strip())
+            battle_options = options if options else None
         except Exception as e:
             output_lines = [f"Error: {e}"]
         output_lines = output_lines[-output_history_limit:]
         output_scroll = 0
         input_text = ""  # Clear input after response
-        # Move non-boss enemies
-        state = move_non_boss_enemies(state)
-        # Ensure there are always 2 non-boss enemies
-        while count_non_boss_enemies(state) < 2:
-            state = spawn_enemy(state)
+        # Only move/spawn enemies if not in battle dialog
+        if not battle_options:
+            state = move_non_boss_enemies(state)
+            while count_non_boss_enemies(state) < 2:
+                state = spawn_enemy(state)
         # Flash if entered a room with enemies
         new_room = state.rooms.get(state.player.location, {})
         if state.player.location != prev_location and new_room.get("enemies"):
@@ -471,9 +508,9 @@ while running:
     elif flash_timer and pygame.time.get_ticks() >= flash_timer:
         flash_timer = 0
 
-    # Draw battle dialog if needed
+    # Draw battle dialog and options if needed
     if battle_dialog:
-        dialog_w, dialog_h = 600, 180
+        dialog_w, dialog_h = 600, 180 + (len(battle_options or []) * 56)
         dialog_x = (WIDTH - dialog_w) // 2
         dialog_y = (HEIGHT - dialog_h) // 2
         dialog_rect = pygame.Rect(dialog_x, dialog_y, dialog_w, dialog_h)
@@ -484,28 +521,59 @@ while running:
         for i, line in enumerate(msg_lines):
             txt = font.render(line, True, (255,255,255))
             screen.blit(txt, (dialog_x+24, dialog_y+32 + i*38))
-        # Draw Continue button
-        btn_w, btn_h = 180, 48
-        btn_rect = pygame.Rect(dialog_x + dialog_w//2 - btn_w//2, dialog_y + dialog_h - btn_h - 16, btn_w, btn_h)
-        pygame.draw.rect(screen, (60,120,60), btn_rect, border_radius=12)
-        pygame.draw.rect(screen, (120,200,120), btn_rect, 2, border_radius=12)
-        btn_txt = font.render("Continue", True, (255,255,255))
-        screen.blit(btn_txt, (btn_rect.centerx - btn_txt.get_width()//2, btn_rect.centery - btn_txt.get_height()//2))
-        pygame.display.flip()
-        # Wait for click or Enter
-        waiting_for_continue = True
-        while waiting_for_continue:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    pygame.quit()
-                    sys.exit()
-                elif event.type == pygame.KEYDOWN and (event.key == pygame.K_RETURN or event.key == pygame.K_SPACE):
-                    waiting_for_continue = False
-                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    mx, my = pygame.mouse.get_pos()
-                    if btn_rect.collidepoint(mx, my):
+        # Draw options as buttons
+        btns = []
+        if battle_options:
+            for i, opt in enumerate(battle_options):
+                btn_w, btn_h = 520, 44
+                btn_rect = pygame.Rect(dialog_x + 40, dialog_y + 100 + i*56, btn_w, btn_h)
+                pygame.draw.rect(screen, (60,120,60), btn_rect, border_radius=10)
+                pygame.draw.rect(screen, (120,200,120), btn_rect, 2, border_radius=10)
+                btn_txt = output_font.render(opt, True, (255,255,255))
+                screen.blit(btn_txt, (btn_rect.x + 16, btn_rect.y + 8))
+                btns.append((btn_rect, opt))
+            pygame.display.flip()
+            # Wait for button click or Enter
+            waiting_for_choice = True
+            while waiting_for_choice:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        pygame.quit()
+                        sys.exit()
+                    elif event.type == pygame.KEYDOWN and (event.key == pygame.K_RETURN or event.key == pygame.K_SPACE):
+                        # Default to first option
+                        pending_command = battle_options[0]
+                        waiting_for_choice = False
+                    elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        mx, my = pygame.mouse.get_pos()
+                        for btn_rect, opt in btns:
+                            if btn_rect.collidepoint(mx, my):
+                                pending_command = opt
+                                waiting_for_choice = False
+        else:
+            # Draw Continue button if no options
+            btn_w, btn_h = 180, 48
+            btn_rect = pygame.Rect(dialog_x + dialog_w//2 - btn_w//2, dialog_y + dialog_h - btn_h - 16, btn_w, btn_h)
+            pygame.draw.rect(screen, (60,120,60), btn_rect, border_radius=12)
+            pygame.draw.rect(screen, (120,200,120), btn_rect, 2, border_radius=12)
+            btn_txt = font.render("Continue", True, (255,255,255))
+            screen.blit(btn_txt, (btn_rect.centerx - btn_txt.get_width()//2, btn_rect.centery - btn_txt.get_height()//2))
+            pygame.display.flip()
+            # Wait for click or Enter
+            waiting_for_continue = True
+            while waiting_for_continue:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        pygame.quit()
+                        sys.exit()
+                    elif event.type == pygame.KEYDOWN and (event.key == pygame.K_RETURN or event.key == pygame.K_SPACE):
                         waiting_for_continue = False
+                    elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        mx, my = pygame.mouse.get_pos()
+                        if btn_rect.collidepoint(mx, my):
+                            waiting_for_continue = False
         battle_dialog = None
+        battle_options = None
 
 pygame.quit()
 sys.exit()
