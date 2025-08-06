@@ -1,12 +1,28 @@
 import pygame
 import sys
-from roguelike_ai import generate_dungeon, Player, GameState, handle_command, ROOM_TYPES, ENEMIES, LOOT_TABLE, openai, api_call_counter, get_api_call_counter
+from roguelike_ai import (
+    generate_dungeon,
+    Player,
+    GameState,
+    handle_command,
+    ROOM_TYPES,
+    ENEMIES,
+    LOOT_TABLE,
+    openai,
+    get_api_call_counter,
+)
 import random
-import copy
 import os
 import time  # Import time module for timeout logic
 import json
-from collections import deque
+
+from .assets import load_enemy_sprites, load_hero_sprites, load_backgrounds
+from .gameplay import (
+    move_non_boss_enemies,
+    count_non_boss_enemies,
+    spawn_enemy,
+    attack_enemy,
+)
 
 # Ensure OpenAI API key is set
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -30,27 +46,6 @@ font = pygame.font.SysFont(None, 36)  # Larger font
 output_font = pygame.font.SysFont(None, 28)
 
 # --- Load Enemy Sprites ---
-def load_enemy_sprites():
-    sprite_dict = {}
-    # Load basic enemy sprites
-    basic_path = 'assets/basic enemies'
-    for fname in os.listdir(basic_path):
-        if fname.lower().endswith('.png'):
-            img = pygame.image.load(os.path.join(basic_path, fname)).convert_alpha()
-            img = pygame.transform.smoothscale(img, (48, 48))
-            sprite_dict[fname[:-4]] = img  # key is filename without .png
-    # Load boss enemy sprites
-    boss_path = 'assets/bosses'
-    if os.path.exists(boss_path):
-        for fname in os.listdir(boss_path):
-            if fname.lower().endswith('.png'):
-                img = pygame.image.load(os.path.join(boss_path, fname)).convert_alpha()
-                img = pygame.transform.smoothscale(img, (64, 64))
-                sprite_dict[fname[:-4]] = img
-                # Debugging: Print loaded boss sprites
-                print("Loaded boss sprites:", [fname[:-4] for fname in os.listdir(boss_path) if fname.lower().endswith('.png')])
-    return sprite_dict
-
 enemy_sprites = load_enemy_sprites()
 
 # --- Dungeon Generation ---
@@ -164,123 +159,14 @@ def wrap_text(text, font, max_width):
     return lines
 
 # --- Load Hero Sprites ---
-def load_hero_sprites():
-    hero_dict = {}
-    hero_path = 'assets/Hero'
-    for fname in os.listdir(hero_path):
-        if fname.lower().endswith('.png'):
-            img = pygame.image.load(os.path.join(hero_path, fname)).convert_alpha()
-            img = pygame.transform.smoothscale(img, (64, 64))
-            key = fname[:-4].replace("Rouge", "Rogue")
-            hero_dict[key] = img  # key is filename without .png
-    return hero_dict
-
 hero_sprites = load_hero_sprites()
 
 # --- Load Backgrounds ---
-def load_backgrounds():
-    bg_list = []
-    bg_path = 'assets/Backgrounds'
-    for fname in os.listdir(bg_path):
-        if fname.lower().endswith('.png'):
-            img = pygame.image.load(os.path.join(bg_path, fname)).convert()
-            img = pygame.transform.smoothscale(img, (WIDTH, HEIGHT))
-            bg_list.append(img)
-    return bg_list
-
-backgrounds = load_backgrounds()
+backgrounds = load_backgrounds(WIDTH, HEIGHT)
 selected_bg = random.choice(backgrounds) if backgrounds else None
 
 # --- Enemy Movement and Spawning Helpers ---
-def move_non_boss_enemies(state):
-    grid_w, grid_h = GRID_W, GRID_H
-    new_rooms = copy.deepcopy(state.rooms)
-    coord_to_room = {room['coords']: rid for rid, room in state.rooms.items()}
-    boss_coords = {room['coords'] for room in state.rooms.values() if room['type'] == 'boss_room'}
-    occupied = {
-        room['coords']
-        for room in state.rooms.values()
-        for e in room['enemies']
-        if e['name'] != 'dungeon_boss'
-    }
-    player_coord = state.rooms[state.player.location]['coords']
-    directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
-
-    def bfs(start, goal, blocked):
-        if start == goal:
-            return []
-        queue = deque([start])
-        came_from = {start: None}
-        while queue:
-            current = queue.popleft()
-            if current == goal:
-                break
-            for dx, dy in directions:
-                nx, ny = current[0] + dx, current[1] + dy
-                if 0 <= nx < grid_w and 0 <= ny < grid_h:
-                    nxt = (nx, ny)
-                    if nxt not in came_from and nxt not in blocked:
-                        queue.append(nxt)
-                        came_from[nxt] = current
-        if goal not in came_from:
-            return None
-        path = []
-        cur = goal
-        while cur != start:
-            path.append(cur)
-            cur = came_from[cur]
-        path.reverse()
-        return path
-
-    for room_id, room in state.rooms.items():
-        for enemy in room['enemies'][:]:
-            if enemy['name'] == 'dungeon_boss':
-                continue  # Boss does not move
-            start = room['coords']
-            occupied.discard(start)
-            blocked = occupied | boss_coords
-            path = bfs(start, player_coord, blocked)
-            if path:
-                next_step = path[0]
-                dest_id = coord_to_room[next_step]
-                if not new_rooms[dest_id]['enemies']:
-                    new_rooms[room_id]['enemies'].remove(enemy)
-                    new_rooms[dest_id]['enemies'].append(enemy)
-                    occupied.add(next_step)
-                else:
-                    occupied.add(start)
-            else:
-                occupied.add(start)
-    state.rooms = new_rooms
-    return state
-
-def count_non_boss_enemies(state):
-    count = 0
-    for room in state.rooms.values():
-        for enemy in room['enemies']:
-            if enemy['name'] != 'dungeon_boss':
-                count += 1
-    return count
-
-def spawn_enemy(state):
-    # Spawn a new non-boss enemy in a random room not occupied by player or boss
-    possible_rooms = [rid for rid, room in state.rooms.items()
-                     if room['type'] != 'boss_room' and rid != state.player.location]
-    if not possible_rooms:
-        return state
-    room_id = random.choice(possible_rooms)
-    name = random.choice([k for k in ENEMIES if k != 'dungeon_boss'])
-    enemy = {**ENEMIES[name], 'name': name}
-    # Assign a random sprite for this enemy
-    sprite_keys = [k for k in enemy_sprites if name in k]
-    if sprite_keys:
-        enemy['sprite'] = random.choice(sprite_keys)
-    else:
-        enemy['sprite'] = None
-    new_rooms = copy.deepcopy(state.rooms)
-    new_rooms[room_id]['enemies'].append(enemy)
-    state.rooms = new_rooms
-    return state
+# moved to ui.gameplay
 
 # --- Hero Selection Dialog ---
 # Mapping of hero names to stat blocks and abilities
@@ -329,34 +215,7 @@ def select_hero():
                         selecting = False
     return selected_key
 
-# --- D20 Roll Function ---
-def roll_d20():
-    return random.randint(1, 20)
-
-# --- D20 Roll Animation ---
-def animate_d20_roll(screen, font, roll_result):
-    roll_rect = pygame.Rect(WIDTH // 2 - 50, HEIGHT // 2 - 50, 100, 100)
-    pygame.draw.rect(screen, (30, 30, 60), roll_rect, border_radius=12)
-    pygame.draw.rect(screen, (200, 200, 255), roll_rect, 4, border_radius=12)
-    roll_text = font.render(f"D20: {roll_result}", True, (255, 255, 255))
-    screen.blit(roll_text, (roll_rect.centerx - roll_text.get_width() // 2, roll_rect.centery - roll_text.get_height() // 2))
-    pygame.display.flip()
-    pygame.time.delay(1000)
-
-# --- Integrate D20 Roll into Attack Logic ---
-def attack_enemy(state, enemy):
-    """Roll a d20 and apply damage to the given enemy.
-
-    Returns a tuple of (message, roll_result) so the caller can display the
-    roll in the output area and forward the result to the AI for consistent
-    narration.
-    """
-    roll_result = roll_d20()
-    animate_d20_roll(screen, font, roll_result)
-    damage = roll_result + state.player.str  # Example: Add player's strength to roll
-    enemy["hp"] -= damage
-    msg = f"You rolled a {roll_result} and dealt {damage} damage to {enemy['name']}!"
-    return msg, roll_result
+# --- D20 and combat helpers moved to ui.gameplay ---
 
 # --- Main Loop ---
 running = True
@@ -624,7 +483,7 @@ while running:
                 room = state.rooms.get(state.player.location, {})
                 target_enemy = next((e for e in room.get('enemies', []) if e.get('hp', 0) > 0), None)
                 if target_enemy:
-                    atk_msg, roll_result_to_send = attack_enemy(state, target_enemy)
+                    atk_msg, roll_result_to_send = attack_enemy(state, target_enemy, screen, font)
                     for line in wrap_text(atk_msg, output_font, output_area.width-32):
                         output_lines.append(line)
                     if target_enemy["hp"] <= 0:
@@ -685,9 +544,9 @@ while running:
         input_text = ""  # Clear input after response
         # Only move/spawn enemies if not in battle dialog
         if not battle_options:
-            state = move_non_boss_enemies(state)
+            state = move_non_boss_enemies(state, GRID_W, GRID_H)
             while count_non_boss_enemies(state) < 2:
-                state = spawn_enemy(state)
+                state = spawn_enemy(state, enemy_sprites)
         # Flash if entered a room with enemies
         new_room = state.rooms.get(state.player.location, {})
         if state.player.location != prev_location and new_room.get("enemies"):
@@ -768,7 +627,7 @@ while running:
                 room = state.rooms.get(state.player.location, {})
                 target_enemy = next((e for e in room.get('enemies', []) if e.get('hp', 0) > 0), None)
                 if target_enemy:
-                    atk_msg, roll_result_to_send = attack_enemy(state, target_enemy)
+                    atk_msg, roll_result_to_send = attack_enemy(state, target_enemy, screen, font)
                     for line in wrap_text(atk_msg, output_font, output_area.width-32):
                         output_lines.append(line)
                     if target_enemy["hp"] <= 0:
@@ -828,9 +687,9 @@ while running:
         output_scroll = 0
         input_text = ""
         if not battle_options:
-            state = move_non_boss_enemies(state)
+            state = move_non_boss_enemies(state, GRID_W, GRID_H)
             while count_non_boss_enemies(state) < 2:
-                state = spawn_enemy(state)
+                state = spawn_enemy(state, enemy_sprites)
         new_room = state.rooms.get(state.player.location, {})
         if state.player.location != prev_location and new_room.get("enemies"):
             flash_timer = pygame.time.get_ticks() + flash_duration
