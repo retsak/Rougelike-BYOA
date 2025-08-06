@@ -6,6 +6,7 @@ import copy
 import os
 import time  # Import time module for timeout logic
 import json
+from collections import deque
 
 # Ensure OpenAI API key is set
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -194,31 +195,62 @@ selected_bg = random.choice(backgrounds) if backgrounds else None
 def move_non_boss_enemies(state):
     grid_w, grid_h = GRID_W, GRID_H
     new_rooms = copy.deepcopy(state.rooms)
+    coord_to_room = {room['coords']: rid for rid, room in state.rooms.items()}
+    boss_coords = {room['coords'] for room in state.rooms.values() if room['type'] == 'boss_room'}
+    occupied = {
+        room['coords']
+        for room in state.rooms.values()
+        for e in room['enemies']
+        if e['name'] != 'dungeon_boss'
+    }
+    player_coord = state.rooms[state.player.location]['coords']
+    directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+
+    def bfs(start, goal, blocked):
+        if start == goal:
+            return []
+        queue = deque([start])
+        came_from = {start: None}
+        while queue:
+            current = queue.popleft()
+            if current == goal:
+                break
+            for dx, dy in directions:
+                nx, ny = current[0] + dx, current[1] + dy
+                if 0 <= nx < grid_w and 0 <= ny < grid_h:
+                    nxt = (nx, ny)
+                    if nxt not in came_from and nxt not in blocked:
+                        queue.append(nxt)
+                        came_from[nxt] = current
+        if goal not in came_from:
+            return None
+        path = []
+        cur = goal
+        while cur != start:
+            path.append(cur)
+            cur = came_from[cur]
+        path.reverse()
+        return path
+
     for room_id, room in state.rooms.items():
         for enemy in room['enemies'][:]:
             if enemy['name'] == 'dungeon_boss':
                 continue  # Boss does not move
-            # Move enemy to random adjacent room
-            x, y = room['coords']
-            directions = [(-1,0),(1,0),(0,-1),(0,1)]
-            random.shuffle(directions)
-            moved = False
-            for dx, dy in directions:
-                nx, ny = x+dx, y+dy
-                if 0 <= nx < grid_w and 0 <= ny < grid_h:
-                    # Find the room at (nx, ny)
-                    for dest_id, dest_room in state.rooms.items():
-                        if 'coords' in dest_room and dest_room['coords'] == (nx, ny):
-                            # Don't move into boss room
-                            if dest_room['type'] == 'boss_room':
-                                continue
-                            # Move enemy
-                            new_rooms[room_id]['enemies'].remove(enemy)
-                            new_rooms[dest_id]['enemies'].append(enemy)
-                            moved = True
-                            break
-                if moved:
-                    break
+            start = room['coords']
+            occupied.discard(start)
+            blocked = occupied | boss_coords
+            path = bfs(start, player_coord, blocked)
+            if path:
+                next_step = path[0]
+                dest_id = coord_to_room[next_step]
+                if not new_rooms[dest_id]['enemies']:
+                    new_rooms[room_id]['enemies'].remove(enemy)
+                    new_rooms[dest_id]['enemies'].append(enemy)
+                    occupied.add(next_step)
+                else:
+                    occupied.add(start)
+            else:
+                occupied.add(start)
     state.rooms = new_rooms
     return state
 
