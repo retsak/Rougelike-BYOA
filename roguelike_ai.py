@@ -237,6 +237,7 @@ Available commands:
     return False
 
 def handle_command(cmd: str, state: GameState, model: str, save_file=None) -> GameState:
+    old_location = state.player.location if hasattr(state.player, 'location') else None
     if cmd.startswith("/"):
         if handle_meta(cmd, state, save_file):
             return state
@@ -246,20 +247,19 @@ def handle_command(cmd: str, state: GameState, model: str, save_file=None) -> Ga
     narrative, state_delta = openai_resp["narrative"], openai_resp["state_delta"]
     # --- Memory: append to history ---
     state.history.append({"turn": state.turn, "command": cmd, "narrative": narrative})
-    # --- Apply state changes ---
     for k, v in state_delta.items():
         current = getattr(state, k)
         if isinstance(current, dict) and isinstance(v, dict):
             deep_update(current, v)
         else:
             setattr(state, k, v)
+    # Robustly preserve player location unless explicitly changed
     if isinstance(state.player, dict):
-        # Always preserve the current location if not present in the new player dict
-        current_location = getattr(state, 'player', None)
-        current_location = current_location.location if hasattr(current_location, 'location') else None
-        if 'location' not in state.player or not state.player['location']:
-            if current_location:
-                state.player['location'] = current_location
+        new_location = state.player.get('location', None)
+        if not new_location:
+            state.player['location'] = old_location
         state.player = Player(**state.player)
+    elif hasattr(state.player, 'location') and not getattr(state.player, 'location', None):
+        state.player.location = old_location
     print(narrative)
     return state
