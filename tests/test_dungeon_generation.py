@@ -8,7 +8,7 @@ import pytest
 # Ensure project root is on sys.path for direct imports
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from roguelike_ai import generate_dungeon
+from core.dungeon import generate_dungeon
 
 
 def test_boss_room_contains_single_dungeon_boss():

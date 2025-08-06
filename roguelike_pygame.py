@@ -1,6 +1,6 @@
 import pygame
 import sys
-from roguelike_ai import generate_dungeon, Player, GameState, handle_command, ROOM_TYPES, ENEMIES, LOOT_TABLE, openai, api_call_counter, get_api_call_counter
+import openai
 import random
 import copy
 import os
@@ -13,6 +13,11 @@ from config import (
     HERO_DIR,
     BACKGROUND_DIR,
 )
+
+from core.dungeon import generate_dungeon
+from core.models import Player, GameState
+from core.data import ROOM_TYPES, ENEMIES, LOOT_TABLE
+from ai import handle_command, get_api_call_counter
 
 # Ensure OpenAI API key is set
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
