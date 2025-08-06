@@ -215,6 +215,21 @@ def handle_meta(cmd: str, state: GameState, save_file: Path) -> bool:
         else:
             print("There is nothing to loot here.\n")
         return True
+    if lc == "/map":
+        # Build a 6x6 grid (coords 0-5)
+        grid = [['#' for _ in range(6)] for _ in range(6)]
+        for room in state.rooms.values():
+            x, y = room["coords"]
+            if room["visited"]:
+                grid[y][x] = '.'
+        # Mark player position
+        px, py = state.rooms[state.player.location]["coords"]
+        grid[py][px] = '@'
+        print("Dungeon Map:")
+        for row in grid:
+            print(' '.join(row))
+        print("@ = you, . = visited, # = unexplored")
+        return True
     if lc == "/help":
         print("""
 Available commands:
@@ -223,6 +238,7 @@ Available commands:
   /loot         Pick up all items in the room
   /inventory    Show your inventory
   /stats        Show your stats
+  /map          Show a map of the dungeon
   /save         Save your game
   /load         Load your game
   /quit, /exit  Quit the game
