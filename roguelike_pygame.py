@@ -368,39 +368,55 @@ while running:
         screen.fill(BLACK)  # Fallback to black if no background is selected
 
     # --- Draw dungeon grid and connections ---
+    player_coords = state.rooms[state.player.location]["coords"]
+
+    def is_adjacent(coords):
+        px, py = player_coords
+        x, y = coords
+        return abs(x - px) + abs(y - py) == 1
+
+    visible_rooms = [r for r in state.rooms.values() if r["visited"] or is_adjacent(r["coords"]) ]
+
     # Draw connections between rooms
-    for room in state.rooms.values():
+    for room in visible_rooms:
         x, y = room["coords"]
         cx, cy = x * CELL_SIZE + CELL_SIZE // 2, y * CELL_SIZE + CELL_SIZE // 2
         for dx, dy in [(-1,0),(1,0),(0,-1),(0,1)]:
             nx, ny = x+dx, y+dy
-            for other in state.rooms.values():
+            for other in visible_rooms:
                 if other["coords"] == (nx, ny):
                     ncx, ncy = nx * CELL_SIZE + CELL_SIZE // 2, ny * CELL_SIZE + CELL_SIZE // 2
                     pygame.draw.line(screen, CONNECTION, (cx,cy), (ncx,ncy), 16)
     # Draw rooms with rounded rectangles and shadow
-    for room in state.rooms.values():
+    for room in visible_rooms:
         x, y = room["coords"]
         rect = pygame.Rect(x*CELL_SIZE+8, y*CELL_SIZE+8, CELL_SIZE-16, CELL_SIZE-16)
         shadow_rect = rect.move(6, 6)
         pygame.draw.rect(screen, (30,30,40), shadow_rect, border_radius=18)
-        color = GREEN if room["type"] == "shrine" else YELLOW if room["type"] == "treasure" else RED if room["enemies"] else GRAY if room["visited"] else BLACK
+        color = (
+            (40, 40, 60) if not room["visited"]
+            else GREEN if room["type"] == "shrine"
+            else YELLOW if room["type"] == "treasure"
+            else RED if room["enemies"]
+            else GRAY
+        )
         pygame.draw.rect(screen, color, rect, border_radius=18)
         pygame.draw.rect(screen, ROOM_BORDER, rect, 3, border_radius=18)
-        # Draw enemy marker if enemies present
-        for enemy in room["enemies"]:
-            ex, ey = x*CELL_SIZE + CELL_SIZE//2, y*CELL_SIZE + CELL_SIZE//2
-            sprite_key = enemy.get('sprite')
-            if sprite_key and sprite_key in enemy_sprites:
-                img_rect = enemy_sprites[sprite_key].get_rect(center=(ex, ey))
-                screen.blit(enemy_sprites[sprite_key], img_rect)
-            elif enemy['name'] == 'slime' and 'slime' in enemy_sprites:
-                img_rect = enemy_sprites['slime'].get_rect(center=(ex, ey))
-                screen.blit(enemy_sprites['slime'], img_rect)
-            else:
-                pygame.draw.circle(screen, (220, 60, 60), (ex, ey), 18)
-                e_txt = output_font.render("E", True, (255,255,255))
-                screen.blit(e_txt, (ex - e_txt.get_width()//2, ey - e_txt.get_height()//2))
+        # Draw enemy marker if enemies present and room discovered
+        if room["visited"]:
+            for enemy in room["enemies"]:
+                ex, ey = x*CELL_SIZE + CELL_SIZE//2, y*CELL_SIZE + CELL_SIZE//2
+                sprite_key = enemy.get('sprite')
+                if sprite_key and sprite_key in enemy_sprites:
+                    img_rect = enemy_sprites[sprite_key].get_rect(center=(ex, ey))
+                    screen.blit(enemy_sprites[sprite_key], img_rect)
+                elif enemy['name'] == 'slime' and 'slime' in enemy_sprites:
+                    img_rect = enemy_sprites['slime'].get_rect(center=(ex, ey))
+                    screen.blit(enemy_sprites['slime'], img_rect)
+                else:
+                    pygame.draw.circle(screen, (220, 60, 60), (ex, ey), 18)
+                    e_txt = output_font.render("E", True, (255,255,255))
+                    screen.blit(e_txt, (ex - e_txt.get_width()//2, ey - e_txt.get_height()//2))
     # Draw player with hero icon
     px, py = state.rooms[state.player.location]["coords"]
     prect = pygame.Rect(px*CELL_SIZE+28, py*CELL_SIZE+28, CELL_SIZE-56, CELL_SIZE-56)
@@ -422,7 +438,9 @@ while running:
         "trap": "TRP",
         "entrance": "EN"
     }
-    for room in state.rooms.values():
+    for room in visible_rooms:
+        if not room["visited"]:
+            continue
         x, y = room["coords"]
         abbr = type_abbr.get(room["type"], room["type"][:2].upper())
         label = font.render(abbr, True, WHITE)
@@ -504,6 +522,8 @@ while running:
         "TRP = Trap",
         "E (red) = Enemy present",
         "@ = You (player)",
+        "Dim = Unexplored room",
+        "Hidden rooms not shown",
     ]
     legend_line_height = 22  # Slightly smaller spacing for legend
     legend_y = stats_panel.bottom - 24 - legend_line_height * (len(legend_lines) - 1)
