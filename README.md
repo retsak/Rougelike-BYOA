@@ -3,16 +3,18 @@
 A text-based roguelike adventure powered by OpenAI. Explore a procedurally generated dungeon, fight monsters, collect loot, and map your journey—all from your terminal!
 
 ## Features
-- Procedural dungeon generation
+- Procedural dungeon generation (now a true grid: rooms and movement match the map)
 - Classic roguelike stats and inventory
 - Natural language commands powered by OpenAI
 - Meta-commands for saving, loading, stats, inventory, and mapping
 - Simple ASCII dungeon map
+- Modern graphical interface with Pygame (optional)
 
 ## Requirements
 - Python 3.9.13
 - An OpenAI API key ([get one here](https://platform.openai.com/account/api-keys))
 - `openai` Python package (see below)
+- `pygame` Python package (for graphical version)
 
 ## Setup
 1. **Clone the repository and enter the folder:**
@@ -29,10 +31,12 @@ A text-based roguelike adventure powered by OpenAI. Explore a procedurally gener
    ```
 3. **Install dependencies:**
    ```sh
-   pip install openai
+   pip install -r requirements.txt
    ```
 
 ## Running the Game
+
+### Text-Only (Terminal) Version
 1. **Set your OpenAI API key:**
    - Recommended: set the environment variable before running:
      ```sh
@@ -48,6 +52,17 @@ A text-based roguelike adventure powered by OpenAI. Explore a procedurally gener
    python roguelike_ai.py --key sk-... --seed 1337
    ```
 
+### Graphical (Pygame) Version
+1. **Install Pygame if you haven't already:**
+   ```sh
+   pip install pygame
+   ```
+2. **Run the graphical client:**
+   ```sh
+   python roguelike_pygame.py
+   ```
+   - The graphical version features a large, modern grid map, clickable input box, and a scrollable output area. Movement and room connections now match the visual grid exactly.
+
 ## Running in Google Colab
 
 You can also run DungeonGPT in a Google Colab notebook:
@@ -57,9 +72,9 @@ You can also run DungeonGPT in a Google Colab notebook:
    !git clone <repo-url>
    %cd <repo-folder>
    ```
-2. **Install the OpenAI package:**
+2. **Install the required packages:**
    ```python
-   !pip install openai
+   !pip install -r requirements.txt
    ```
 3. **Set your OpenAI API key:**
    ```python
@@ -81,7 +96,7 @@ You can also run DungeonGPT in a Google Colab notebook:
 - `/loot`         Pick up all items in the room
 - `/inventory`    Show your inventory
 - `/stats`        Show your stats
-- `/map`          Show a map of the dungeon
+- `/map`          Show a map of the dungeon (matches the grid in the graphical version)
 - `/save`         Save your game
 - `/load`         Load your game
 - `/quit` `/exit` Quit the game
