@@ -50,38 +50,6 @@ A text-based roguelike adventure powered by OpenAI. Explore a procedurally gener
 
 > **Note:** The old terminal/CLI version is no longer supported. `roguelike_ai.py` is now a pure library and does not run the game by itself.
 
-## Running in Google Colab
-
-You can also run DungeonGPT in a Google Colab notebook:
-
-1. **Upload your project files to Colab** (or clone the repo in a Colab cell):
-   ```python
-   !git clone <repo-url>
-   %cd <repo-folder>
-   ```
-2. **Install the required packages:**
-   ```python
-   !pip install -r requirements.txt
-   ```
-3. **Set your OpenAI API key:**
-   ```python
-   import os
-   os.environ["OPENAI_API_KEY"] = "sk-..."
-   ```
-4. **Use the library in a notebook cell** (`roguelike_ai.py` contains only library code and isn't executable on its own):
-   ```python
-   from roguelike_ai import generate_dungeon, GameState, Player
-
-   rooms = generate_dungeon(seed=1337)
-   state = GameState(seed=1337, rooms=rooms, player=Player())
-   print(state.to_json())
-   ```
-
-**Note:**
-- `roguelike_ai.py` functions solely as a library. To play the game, run `roguelike_pygame.py` locally on a machine with a display.
-- Colab notebooks are not ideal for interactive input or graphics. If you want to experiment in Colab, adapt the code to use notebook cells for input/output.
-- The game requires an internet connection and a valid OpenAI API key.
-
 ## Commands
 - `/help`         Show help menu
 - `/look`         Describe the current room
