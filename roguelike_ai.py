@@ -254,7 +254,7 @@ def print_intro():
 def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--key", type=str, help="OpenAI API key")
-    parser.add_argument("--model", type=str, default="gpt-3.5-turbo", help="OpenAI model")
+    parser.add_argument("--model", type=str, default="gpt-4.1-mini", help="OpenAI model")
     parser.add_argument("--seed", type=int, default=random.randint(0, 2**32 - 1), help="Random seed")
     parser.add_argument("--load", type=Path, help="Save file to load")
     return parser.parse_args()
