@@ -3,7 +3,7 @@
 roguelike_ai.py ─ Build‑Your‑Own‑Adventure Roguelike powered by OpenAI
 =====================================================================
 Library of game logic, data classes, and OpenAI integration for DungeonGPT.
-All gameplay and UI should be handled in the client (e.g., roguelike_pygame.py).
+All gameplay and UI should be handled in the client (e.g., ui/main.py).
 """
 from __future__ import annotations
 
