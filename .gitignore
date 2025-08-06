@@ -1,1 +1,9 @@
-__pycache__/roguelike_ai.cpython-39.pyc
+__pycache__/
+*.pyc
+tests/__pycache__/
+
+.venv/
+assets/audio/*
+!assets/audio/.gitkeep
+Assets/Audio/*
+!Assets/Audio/.gitkeep
