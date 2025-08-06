@@ -739,6 +739,9 @@ while running:
                                     rooms = generate_grid_dungeon(seed, GRID_W, GRID_H)
                                     player = Player(location="room_0")
                                     state = GameState(seed=seed, rooms=rooms, player=player)
+                                    # Ensure state.player is a Player object
+                                    if isinstance(state.player, dict):
+                                        state.player = Player(**state.player)
                                     selected_hero = select_hero()
                                     player_icon = hero_sprites[selected_hero]
                                     game_over = False
@@ -880,6 +883,9 @@ while running:
                                     rooms = generate_grid_dungeon(seed, GRID_W, GRID_H)
                                     player = Player(location="room_0")
                                     state = GameState(seed=seed, rooms=rooms, player=player)
+                                    # Ensure state.player is a Player object
+                                    if isinstance(state.player, dict):
+                                        state.player = Player(**state.player)
                                     selected_hero = select_hero()
                                     player_icon = hero_sprites[selected_hero]
                                     game_over = False
