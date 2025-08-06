@@ -45,7 +45,9 @@ ENEMIES = {
 }
 
 LOOT_TABLE = ["health potion", "silver key", "torch", "old map piece", "leather boots"]
-ROOM_TYPES = ["corridor", "treasure", "trap", "enemy_lair", "shrine", "boss_room", "locked"]
+# Note: "boss_room" is intentionally excluded; a boss room is assigned explicitly
+# during dungeon generation routines.
+ROOM_TYPES = ["corridor", "treasure", "trap", "enemy_lair", "shrine", "locked"]
 
 ROOM_TYPE_NAMES = {
     "EN": "Enemy Room",
