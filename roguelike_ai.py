@@ -2,33 +2,16 @@
 """
 roguelike_ai.py ─ Build‑Your‑Own‑Adventure Roguelike powered by OpenAI
 =====================================================================
-🎲 **v0.3.1 PATCH** – Optional `--key`
-------------------------------------
-* **Auth flexibility**: Supply `--key YOUR_API_KEY` *or* rely on the `OPENAI_API_KEY` env‑var. If neither is set, the script will prompt you interactively instead of bailing out.
-* Updated CLI help strings & README header.
-
-```bash
-# env‑var route (recommended)
-export OPENAI_API_KEY=sk‑...
-python roguelike_ai.py --seed 1337
-
-# explicit CLI flag route
-python roguelike_ai.py --key sk‑... --seed 1337
-```
+Library of game logic, data classes, and OpenAI integration for DungeonGPT.
+All gameplay and UI should be handled in the client (e.g., roguelike_pygame.py).
 """
 from __future__ import annotations
 
-import argparse
-import getpass
 import json
-import os
 import random
 import re
-import sys
 from dataclasses import dataclass, field, asdict
-from pathlib import Path
-from typing import Dict, List, Optional
-
+from typing import Dict, List
 import openai
 
 ########################################################################
@@ -108,7 +91,6 @@ class GameState:
 ########################################################################
 # 4. Dungeon Generation                                               #
 ########################################################################
-
 def generate_dungeon(seed: int, n_rooms: int = 12) -> Dict[str, dict]:
     random.seed(seed)
     rooms: Dict[str, dict] = {}
@@ -165,19 +147,18 @@ def call_openai(state: GameState, cmd: str, model: str) -> dict:
 ########################################################################
 # 6. Engine Functions                                                 #
 ########################################################################
-META_CMDS = {"/save", "/load", "/quit", "/exit", "/stats", "/inventory", "/look", "/loot"}
+META_CMDS = {"/save", "/load", "/quit", "/exit", "/stats", "/inventory", "/look", "/loot", "/map", "/help"}
 
-
-def handle_meta(cmd: str, state: GameState, save_file: Path) -> bool:
+def handle_meta(cmd: str, state: GameState, save_file) -> bool:
     lc = cmd.lower()
     if lc in {"/quit", "/exit"}:
         print("Goodbye!")
-        sys.exit(0)
-    if lc == "/save":
+        return True
+    if lc == "/save" and save_file:
         save_file.write_text(state.to_json())
         print(f"[✓] Saved to {save_file}")
         return True
-    if lc == "/load":
+    if lc == "/load" and save_file:
         if save_file.exists():
             new = GameState.from_json(save_file.read_text())
             state.rooms, state.player, state.turn = new.rooms, new.player, new.turn
@@ -216,13 +197,11 @@ def handle_meta(cmd: str, state: GameState, save_file: Path) -> bool:
             print("There is nothing to loot here.\n")
         return True
     if lc == "/map":
-        # Build a 6x6 grid (coords 0-5)
         grid = [['#' for _ in range(6)] for _ in range(6)]
         for room in state.rooms.values():
             x, y = room["coords"]
             if room["visited"]:
                 grid[y][x] = '.'
-        # Mark player position
         px, py = state.rooms[state.player.location]["coords"]
         grid[py][px] = '@'
         print("Dungeon Map:")
@@ -246,80 +225,25 @@ Available commands:
         return True
     return False
 
-def handle_command(cmd: str, state: GameState, model: str, save_file: Path) -> GameState:
+def handle_command(cmd: str, state: GameState, model: str, save_file=None) -> GameState:
     if cmd.startswith("/"):
         if handle_meta(cmd, state, save_file):
             return state
         print("[!] Unknown command:", cmd)
         return state
-    # Normal play command
     openai_resp = call_openai(state, cmd, model)
     narrative, state_delta = openai_resp["narrative"], openai_resp["state_delta"]
-    # Update state
     for k, v in state_delta.items():
         current = getattr(state, k)
         if isinstance(current, dict) and isinstance(v, dict):
             deep_update(current, v)
         else:
             setattr(state, k, v)
-    # Ensure state.player is always a Player instance
     if isinstance(state.player, dict):
+        old_location = getattr(state, 'player', None)
+        old_location = old_location.location if hasattr(old_location, 'location') else None
+        if 'location' not in state.player and old_location:
+            state.player['location'] = old_location
         state.player = Player(**state.player)
     print(narrative)
     return state
-
-########################################################################
-# 7. CLI & Main Loop                                                  #
-########################################################################
-def print_intro():
-    print(
-        "🎲 Welcome to DungeonGPT! 🎲\n"
-        "Build‑Your‑Own‑Adventure Roguelike powered by OpenAI.\n"
-        "Type /help for commands.\n"
-    )
-
-def get_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--key", type=str, help="OpenAI API key")
-    parser.add_argument("--model", type=str, default="gpt-4.1-mini", help="OpenAI model")
-    parser.add_argument("--seed", type=int, default=random.randint(0, 2**32 - 1), help="Random seed")
-    parser.add_argument("--load", type=Path, help="Save file to load")
-    return parser.parse_args()
-
-def main():
-    args = get_args()
-    if args.key:
-        openai.api_key = args.key
-    else:
-        openai.api_key = os.getenv("OPENAI_API_KEY") or getpass.getpass("OpenAI API Key: ")
-    random.seed(args.seed)
-    print(f"Using seed: {args.seed}\n")
-    # Dungeon setup
-    rooms = generate_dungeon(args.seed)
-    player = Player(location="room_0")
-    state = GameState(seed=args.seed, rooms=rooms, player=player)
-    save_file = Path("savefile.json")  # Default save file
-
-    # Load from file if requested
-    if args.load and args.load.exists():
-        state = GameState.from_json(args.load.read_text())
-        print(f"Loaded game state from {args.load}")
-
-    print_intro()
-    print(state.rooms)
-    # Main loop
-    while player.is_alive():
-        state.turn += 1
-        cmd = input("> ")
-        if cmd.strip():
-            state = handle_command(cmd.strip(), state, args.model, save_file)
-        if state.rooms[player.location]["visited"] is False:
-            state.rooms[player.location]["visited"] = True
-            print("You have entered a new room.")
-        else:
-            print("You are back in a familiar room.")
-
-    print("You have died. Game over.")
-
-if __name__ == "__main__":
-    main()

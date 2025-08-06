@@ -8,7 +8,7 @@ A text-based roguelike adventure powered by OpenAI. Explore a procedurally gener
 - Natural language commands powered by OpenAI
 - Meta-commands for saving, loading, stats, inventory, and mapping
 - Simple ASCII dungeon map
-- Modern graphical interface with Pygame (optional)
+- Modern graphical interface with Pygame (all gameplay/UI is now in the graphical client)
 
 ## Requirements
 - Python 3.9.13
@@ -36,22 +36,6 @@ A text-based roguelike adventure powered by OpenAI. Explore a procedurally gener
 
 ## Running the Game
 
-### Text-Only (Terminal) Version
-1. **Set your OpenAI API key:**
-   - Recommended: set the environment variable before running:
-     ```sh
-     set OPENAI_API_KEY=sk-...   # Windows
-     export OPENAI_API_KEY=sk-... # macOS/Linux
-     ```
-   - Or, you can use the `--key` flag when running the script.
-
-2. **Start the game:**
-   ```sh
-   python roguelike_ai.py --seed 1337
-   # Or with explicit API key
-   python roguelike_ai.py --key sk-... --seed 1337
-   ```
-
 ### Graphical (Pygame) Version
 1. **Install Pygame if you haven't already:**
    ```sh
@@ -61,7 +45,10 @@ A text-based roguelike adventure powered by OpenAI. Explore a procedurally gener
    ```sh
    python roguelike_pygame.py
    ```
+   - All gameplay and UI are now handled in the graphical client. The core logic is in `roguelike_ai.py` (as a library only).
    - The graphical version features a large, modern grid map, clickable input box, and a scrollable output area. Movement and room connections now match the visual grid exactly.
+
+> **Note:** The old terminal/CLI version is no longer supported. `roguelike_ai.py` is now a pure library and does not run the game by itself.
 
 ## Running in Google Colab
 
