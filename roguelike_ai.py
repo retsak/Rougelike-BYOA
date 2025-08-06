@@ -42,6 +42,13 @@ def roll(expr: str | int) -> int:
     n, sides = map(int, DICE_RE.fullmatch(expr).groups())
     return sum(random.randint(1, sides) for _ in range(n))
 
+def deep_update(d, u):
+    for k, v in u.items():
+        if isinstance(v, dict) and isinstance(d.get(k), dict):
+            deep_update(d[k], v)
+        else:
+            d[k] = v
+
 ########################################################################
 # 2. Static Game Data                                                  #
 ########################################################################
@@ -234,10 +241,14 @@ def handle_command(cmd: str, state: GameState, model: str, save_file: Path) -> G
     narrative, state_delta = openai_resp["narrative"], openai_resp["state_delta"]
     # Update state
     for k, v in state_delta.items():
-        if isinstance(getattr(state, k), dict):
-            getattr(state, k).update(v)
+        current = getattr(state, k)
+        if isinstance(current, dict) and isinstance(v, dict):
+            deep_update(current, v)
         else:
             setattr(state, k, v)
+    # Ensure state.player is always a Player instance
+    if isinstance(state.player, dict):
+        state.player = Player(**state.player)
     print(narrative)
     return state
 
