@@ -1,9 +1,10 @@
 import pygame
 import sys
-from roguelike_ai import generate_dungeon, Player, GameState, handle_command, ROOM_TYPES, ENEMIES, LOOT_TABLE
+from roguelike_ai import generate_dungeon, Player, GameState, handle_command, ROOM_TYPES, ENEMIES, LOOT_TABLE, openai, api_call_counter, get_api_call_counter
 import random
 import copy
 import os
+import time  # Import time module for timeout logic
 
 # Ensure OpenAI API key is set
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -11,6 +12,9 @@ if not OPENAI_API_KEY:
     print("OpenAI API key not found in environment variables.")
     OPENAI_API_KEY = input("Please enter your OpenAI API key: ")
     os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
+
+# Pass the OpenAI API key to roguelike_ai
+openai.api_key = OPENAI_API_KEY
 
 # --- Pygame Setup ---
 pygame.init()
@@ -80,7 +84,9 @@ def generate_grid_dungeon(seed: int, grid_w: int = 6, grid_h: int = 6) -> dict:
     rooms[boss_room]["type"] = "boss_room"
     boss_enemy = {**ENEMIES["dungeon_boss"], "name": "dungeon_boss"}
     # Ensure boss sprite assignment
-    boss_sprite_keys = [k for k in enemy_sprites if "boss" in k.lower() or "dungeon_boss" in k.lower()]
+    boss_sprite_keys = [k for k in enemy_sprites if any(word in k.lower() for word in ["boss", "dungeon_boss", "dragon"])]
+    if not boss_sprite_keys:
+        boss_sprite_keys = list(enemy_sprites.keys())  # fallback: use any sprite
     if boss_sprite_keys:
         boss_enemy['sprite'] = random.choice(boss_sprite_keys)
     else:
@@ -310,6 +316,10 @@ flash_duration = 200  # ms
 battle_dialog = None  # Holds enemy names if a battle dialog should be shown
 selected_hero = select_hero()
 player_icon = hero_sprites[selected_hero]
+# Ensure battle_options is defined before use
+battle_options = None
+waiting_start_time = None  # Initialize waiting start time
+TIMEOUT_DURATION = 10  # seconds
 while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -320,6 +330,7 @@ while running:
                     pending_command = input_text.strip()
                     waiting = True
                     waiting_dots = 0
+                    waiting_start_time = time.time()  # Reset waiting start time
                 input_text = ""
             elif event.key == pygame.K_BACKSPACE:
                 input_text = input_text[:-1]
@@ -436,12 +447,20 @@ while running:
     pygame.draw.rect(screen, (30, 30, 50), status_bar_rect, border_radius=8)
     pygame.draw.rect(screen, ROOM_BORDER, status_bar_rect, 2, border_radius=8)
     if waiting:
-        dots = '.' * ((pygame.time.get_ticks() // 400) % 4)
-        wait_txt = output_font.render(f"Waiting for Dungeon Master{dots}", True, (180, 180, 255))
-        txt_x = status_bar_rect.x+16
-        txt_y = status_bar_rect.y + (STATUS_BAR_HEIGHT - wait_txt.get_height()) // 2
-        screen.blit(wait_txt, (txt_x, txt_y))
-
+        if waiting_start_time is None:
+            waiting_start_time = time.time()
+        elif time.time() - waiting_start_time > TIMEOUT_DURATION:
+            waiting = False
+            pending_command = None
+            waiting_start_time = None
+            output_lines.append("Dungeon Master did not respond in time. Please try again.")
+            output_scroll = 0
+        else:
+            dots = '.' * ((pygame.time.get_ticks() // 400) % 4)
+            wait_txt = output_font.render(f"Waiting for Dungeon Master{dots} (API Calls: {get_api_call_counter()})", True, (180, 180, 255))
+            txt_x = status_bar_rect.x+16
+            txt_y = status_bar_rect.y + (STATUS_BAR_HEIGHT - wait_txt.get_height()) // 2
+            screen.blit(wait_txt, (txt_x, txt_y))
     # --- Stats Panel ---
     pygame.draw.rect(screen, (28, 28, 40), stats_panel)
     pygame.draw.rect(screen, ROOM_BORDER, stats_panel, 3)
@@ -501,6 +520,7 @@ while running:
             pending_command = input_text.strip()
             waiting = True
             waiting_dots = 0
+            waiting_start_time = time.time()  # Reset waiting start time
             input_text = ""
         while pygame.mouse.get_pressed()[0]:
             pygame.event.pump()
@@ -548,6 +568,48 @@ while running:
         waiting = False
         pending_command = None
 
+    # After setting pending_command, immediately process the command
+    if pending_command:
+        prev_location = state.player.location
+        try:
+            import io
+            import contextlib
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                state = handle_command(pending_command, state, "gpt-4.1-mini", None)
+            narrative = buf.getvalue().strip()
+            output_lines = []
+            output_lines.append(f"> {pending_command}")
+            if narrative:
+                for para in narrative.split('\n'):
+                    for line in wrap_text(para, output_font, output_area.width-32):
+                        output_lines.append(line)
+            options = []
+            for line in narrative.split('\n'):
+                if line.strip().startswith(tuple(str(i)+'.' for i in range(1,10))):
+                    options.append(line.strip())
+            battle_options = options if options else None
+        except Exception as e:
+            output_lines = [f"Error: {e}"]
+        output_lines = output_lines[-output_history_limit:]
+        output_scroll = 0
+        input_text = ""
+        if not battle_options:
+            state = move_non_boss_enemies(state)
+            while count_non_boss_enemies(state) < 2:
+                state = spawn_enemy(state)
+        new_room = state.rooms.get(state.player.location, {})
+        if state.player.location != prev_location and new_room.get("enemies"):
+            flash_timer = pygame.time.get_ticks() + flash_duration
+            enemy_names = [e['name'].replace('_', ' ').title() for e in new_room.get('enemies',[])]
+            battle_dialog = enemy_names
+        else:
+            battle_dialog = None
+            battle_options = None
+        waiting = False
+        pending_command = None
+        continue  # Skip the rest of the loop to avoid double-processing
+
     # Draw flash overlay if needed
     if flash_timer and pygame.time.get_ticks() < flash_timer:
         s = pygame.Surface((WIDTH, HEIGHT))
@@ -576,11 +638,15 @@ while running:
         if battle_options:
             for i, opt in enumerate(battle_options):
                 btn_w, btn_h = 520, 44
-                btn_rect = pygame.Rect(dialog_x + 40, dialog_y + 100 + i*56, btn_w, btn_h)
+                # Wrap option text for button
+                wrapped_lines = wrap_text(opt, output_font, btn_w - 32)
+                btn_height = 28 * len(wrapped_lines) + 16
+                btn_rect = pygame.Rect(dialog_x + 40, dialog_y + 100 + i*56, btn_w, btn_height)
                 pygame.draw.rect(screen, (60,120,60), btn_rect, border_radius=10)
                 pygame.draw.rect(screen, (120,200,120), btn_rect, 2, border_radius=10)
-                btn_txt = output_font.render(opt, True, (255,255,255))
-                screen.blit(btn_txt, (btn_rect.x + 16, btn_rect.y + 8))
+                for j, line in enumerate(wrapped_lines):
+                    btn_txt = output_font.render(line, True, (255,255,255))
+                    screen.blit(btn_txt, (btn_rect.x + 16, btn_rect.y + 8 + j*28))
                 btns.append((btn_rect, opt))
             pygame.display.flip()
             # Wait for button click or Enter

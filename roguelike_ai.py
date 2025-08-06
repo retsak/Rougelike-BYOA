@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import random
 import re
+import os
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List
 import openai
@@ -190,6 +191,8 @@ SYSTEM_PROMPT = (
     "If the player is in danger, warn them and suggest defensive or clever actions. "
     "If the player ignores or moves away from a hostile creature, narrate the enemy's reaction and the consequences (damage, attacks, etc.). "
     "Always offer at least two possible actions or directions after each turn. "
+    "If the player is in a battle (i.e., shares a room with a living enemy), you MUST provide at least two numbered actionable options (e.g., '1. Attack', '2. Flee', '3. Use Item') for the player to select from. "
+    "If the player must select an action, always present the options as a numbered list at the end of your narrative. "
 
     "### Strict Gameplay Rules\n"
     "• Always apply the rules in the JSON `RULES` block above.\n"
@@ -205,7 +208,19 @@ SYSTEM_PROMPT = (
     "Stay consistent, keep tension high, and remember: an un-dealt-with enemy is a stabbing you owe the player."
 )
 
+# Add a counter to track API calls
+api_call_counter = 1
+
+# Update the call_openai function to increment the counter
 def call_openai(state: GameState, cmd: str, model: str, roll_result: int = None) -> dict:
+    global api_call_counter
+    api_call_counter += 1  # Increment the counter
+
+    # Ensure OpenAI API key is set
+    openai.api_key = os.getenv("OPENAI_API_KEY")
+    if not openai.api_key:
+        raise ValueError("OpenAI API key is not set. Please check your environment variables.")
+
     # Pass history as context for memory
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -226,6 +241,10 @@ def call_openai(state: GameState, cmd: str, model: str, roll_result: int = None)
         return json.loads(content)
     except json.JSONDecodeError:
         return {"narrative": content, "state_delta": {}}
+
+# Add a function to retrieve the current API call counter
+def get_api_call_counter():
+    return api_call_counter
 
 ########################################################################
 # 6. Engine Functions                                                 #
@@ -325,14 +344,17 @@ def handle_command(cmd: str, state: GameState, model: str, save_file=None) -> Ga
             deep_update(current, v)
         else:
             setattr(state, k, v)
-    # Robustly preserve player location unless explicitly changed
+    # Ensure state.player is always a Player object
     if isinstance(state.player, dict):
-        new_location = state.player.get('location', None)
-        if not new_location:
+        if 'location' not in state.player:
             state.player['location'] = old_location
         state.player = Player(**state.player)
-    elif hasattr(state.player, 'location') and not getattr(state.player, 'location', None):
-        state.player.location = old_location
+    elif not isinstance(state.player, Player):
+        # Fallback: try to convert if possible
+        try:
+            state.player = Player(**dict(state.player))
+        except Exception:
+            pass
 
     # --- Enemy reaction logic ---
     room = state.rooms[state.player.location]
