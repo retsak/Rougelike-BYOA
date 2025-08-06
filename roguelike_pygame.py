@@ -169,7 +169,8 @@ def load_hero_sprites():
         if fname.lower().endswith('.png'):
             img = pygame.image.load(os.path.join(hero_path, fname)).convert_alpha()
             img = pygame.transform.smoothscale(img, (64, 64))
-            hero_dict[fname[:-4]] = img  # key is filename without .png
+            key = fname[:-4].replace("Rouge", "Rogue")
+            hero_dict[key] = img  # key is filename without .png
     return hero_dict
 
 hero_sprites = load_hero_sprites()
