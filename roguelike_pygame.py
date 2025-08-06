@@ -80,7 +80,8 @@ def generate_grid_dungeon(seed: int, grid_w: int = 6, grid_h: int = 6) -> dict:
                 rooms[room_id]["enemies"].append(enemy)
             if random.random() < 0.5:
                 rooms[room_id]["items"].append(random.choice(LOOT_TABLE))
-    # Place boss room at farthest cell
+    # Assign a boss room explicitly after all others are generated since
+    # "boss_room" is not part of ROOM_TYPES.
     boss_room = f"room_{grid_w*grid_h-1}"
     rooms[boss_room]["type"] = "boss_room"
     boss_enemy = {**ENEMIES["dungeon_boss"], "name": "dungeon_boss"}
