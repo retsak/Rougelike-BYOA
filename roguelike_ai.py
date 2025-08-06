@@ -331,14 +331,20 @@ Available commands:
         return True
     return False
 
-def handle_command(cmd: str, state: GameState, model: str, save_file=None) -> dict:
+def handle_command(cmd: str, state: GameState, model: str, roll_result: int | None = None, save_file=None) -> dict:
+    """Process a player command and merge the resulting state changes.
+
+    The optional ``roll_result`` allows the caller to supply a precomputed die
+    roll (e.g., from local combat resolution) so that the OpenAI narrative can
+    remain consistent with the engine's mechanics.
+    """
     old_location = state.player.location if hasattr(state.player, 'location') else None
     if cmd.startswith("/"):
         if handle_meta(cmd, state, save_file):
             return {"narrative": "", "state_delta": {}}
         print("[!] Unknown command:", cmd)
         return {"narrative": "[!] Unknown command.", "state_delta": {}}
-    openai_resp = call_openai(state, cmd, model)
+    openai_resp = call_openai(state, cmd, model, roll_result)
     narrative, state_delta = openai_resp["narrative"], openai_resp["state_delta"]
     # --- Memory: append to history ---
     state.history.append({"turn": state.turn, "command": cmd, "narrative": narrative})
