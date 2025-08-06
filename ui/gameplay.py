@@ -98,7 +98,13 @@ def roll_d20():
 
 
 def animate_d20_roll(screen, font, roll_result):
-    roll_rect = pygame.Rect(screen.get_width() // 2 - 50, screen.get_height() // 2 - 50, 100, 100)
+    ROLL_RECT_SIZE = 100
+    roll_rect = pygame.Rect(
+        screen.get_width() // 2 - ROLL_RECT_SIZE // 2,
+        screen.get_height() // 2 - ROLL_RECT_SIZE // 2,
+        ROLL_RECT_SIZE,
+        ROLL_RECT_SIZE
+    )
     pygame.draw.rect(screen, (30, 30, 60), roll_rect, border_radius=12)
     pygame.draw.rect(screen, (200, 200, 255), roll_rect, 4, border_radius=12)
     roll_text = font.render(f"D20: {roll_result}", True, (255, 255, 255))
