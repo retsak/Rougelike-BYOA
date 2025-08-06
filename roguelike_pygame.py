@@ -7,6 +7,12 @@ import os
 import time  # Import time module for timeout logic
 import json
 from collections import deque
+from config import (
+    BASIC_ENEMIES_DIR,
+    BOSSES_DIR,
+    HERO_DIR,
+    BACKGROUND_DIR,
+)
 
 # Ensure OpenAI API key is set
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -33,22 +39,19 @@ output_font = pygame.font.SysFont(None, 28)
 def load_enemy_sprites():
     sprite_dict = {}
     # Load basic enemy sprites
-    basic_path = 'assets/basic enemies'
-    for fname in os.listdir(basic_path):
-        if fname.lower().endswith('.png'):
-            img = pygame.image.load(os.path.join(basic_path, fname)).convert_alpha()
-            img = pygame.transform.smoothscale(img, (48, 48))
-            sprite_dict[fname[:-4]] = img  # key is filename without .png
+    for path in BASIC_ENEMIES_DIR.glob("*.png"):
+        img = pygame.image.load(str(path)).convert_alpha()
+        img = pygame.transform.smoothscale(img, (48, 48))
+        sprite_dict[path.stem] = img  # key is filename without .png
     # Load boss enemy sprites
-    boss_path = 'assets/bosses'
-    if os.path.exists(boss_path):
-        for fname in os.listdir(boss_path):
-            if fname.lower().endswith('.png'):
-                img = pygame.image.load(os.path.join(boss_path, fname)).convert_alpha()
-                img = pygame.transform.smoothscale(img, (64, 64))
-                sprite_dict[fname[:-4]] = img
-                # Debugging: Print loaded boss sprites
-                print("Loaded boss sprites:", [fname[:-4] for fname in os.listdir(boss_path) if fname.lower().endswith('.png')])
+    if BOSSES_DIR.exists():
+        boss_files = list(BOSSES_DIR.glob("*.png"))
+        for path in boss_files:
+            img = pygame.image.load(str(path)).convert_alpha()
+            img = pygame.transform.smoothscale(img, (64, 64))
+            sprite_dict[path.stem] = img
+        # Debugging: Print loaded boss sprites
+        print("Loaded boss sprites:", [p.stem for p in boss_files])
     return sprite_dict
 
 enemy_sprites = load_enemy_sprites()
@@ -93,7 +96,7 @@ def generate_grid_dungeon(seed: int, grid_w: int = 6, grid_h: int = 6) -> dict:
     if boss_sprite_keys:
         boss_enemy['sprite'] = random.choice(boss_sprite_keys)
     else:
-        print("Warning: No boss sprites found in assets/bosses.")
+        print(f"Warning: No boss sprites found in {BOSSES_DIR}.")
         boss_enemy['sprite'] = None
     rooms[boss_room]["enemies"] = [boss_enemy]
     return rooms
@@ -166,13 +169,11 @@ def wrap_text(text, font, max_width):
 # --- Load Hero Sprites ---
 def load_hero_sprites():
     hero_dict = {}
-    hero_path = 'assets/Hero'
-    for fname in os.listdir(hero_path):
-        if fname.lower().endswith('.png'):
-            img = pygame.image.load(os.path.join(hero_path, fname)).convert_alpha()
-            img = pygame.transform.smoothscale(img, (64, 64))
-            key = fname[:-4].replace("Rouge", "Rogue")
-            hero_dict[key] = img  # key is filename without .png
+    for path in HERO_DIR.glob("*.png"):
+        img = pygame.image.load(str(path)).convert_alpha()
+        img = pygame.transform.smoothscale(img, (64, 64))
+        key = path.stem.replace("Rouge", "Rogue")
+        hero_dict[key] = img  # key is filename without .png
     return hero_dict
 
 hero_sprites = load_hero_sprites()
@@ -180,12 +181,10 @@ hero_sprites = load_hero_sprites()
 # --- Load Backgrounds ---
 def load_backgrounds():
     bg_list = []
-    bg_path = 'assets/Backgrounds'
-    for fname in os.listdir(bg_path):
-        if fname.lower().endswith('.png'):
-            img = pygame.image.load(os.path.join(bg_path, fname)).convert()
-            img = pygame.transform.smoothscale(img, (WIDTH, HEIGHT))
-            bg_list.append(img)
+    for path in BACKGROUND_DIR.glob("*.png"):
+        img = pygame.image.load(str(path)).convert()
+        img = pygame.transform.smoothscale(img, (WIDTH, HEIGHT))
+        bg_list.append(img)
     return bg_list
 
 backgrounds = load_backgrounds()
