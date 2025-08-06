@@ -46,6 +46,26 @@ ENEMIES = {
 LOOT_TABLE = ["health potion", "silver key", "torch", "old map piece", "leather boots"]
 ROOM_TYPES = ["corridor", "treasure", "trap", "enemy_lair", "shrine", "boss_room", "locked"]
 
+ROOM_TYPE_NAMES = {
+    "EN": "Enemy Room",
+    "TR": "Treasure Chamber",
+    "SH": "Ancient Shrine",
+    "BO": "Boss Room",
+    "CO": "Corridor",
+    "LO": "Locked Room",
+    "TRP": "Trap Room",
+    "ENT": "Entrance"
+}
+
+def cardinal_direction(from_xy, to_xy):
+    dx = to_xy[0] - from_xy[0]
+    dy = to_xy[1] - from_xy[1]
+    if dy == -1: return "north"
+    if dy == 1:  return "south"
+    if dx == 1:  return "east"
+    if dx == -1: return "west"
+    return "unknown"
+
 ########################################################################
 # 3. Data classes                                                      #
 ########################################################################

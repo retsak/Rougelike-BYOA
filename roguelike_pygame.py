@@ -108,7 +108,14 @@ input_color = (30, 30, 30)
 input_text_color = (200, 255, 200)
 
 # --- Output State ---
-output_lines = ["Welcome to DungeonGPT! Type /help for commands."]
+output_lines = [
+    "Welcome, brave adventurer, to DungeonGPT!",
+    "Your quest begins in a mysterious dungeon filled with monsters,",
+    "treasures, and untold dangers. Navigate carefully, fight wisely,",
+    "and may fortune favor your journey!",
+    "",
+    "Type /help to see available commands."
+]
 max_output_lines = 12  # Number of lines visible at once
 output_history_limit = 200  # Total lines to keep for scrolling
 output_scroll = 0  # Scroll offset
@@ -123,9 +130,10 @@ def wrap_text(text, font, max_width):
     words = text.split(' ')
     lines = []
     current = ''
+    effective_width = int(max_width * 0.8)
     for word in words:
         test = current + (' ' if current else '') + word
-        if font.size(test)[0] <= max_width:
+        if font.size(test)[0] <= effective_width:
             current = test
         else:
             if current:
