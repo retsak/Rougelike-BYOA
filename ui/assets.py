@@ -12,12 +12,13 @@ def load_enemy_sprites():
             sprite_dict[fname[:-4]] = img
     boss_path = 'assets/bosses'
     if os.path.exists(boss_path):
-        for fname in os.listdir(boss_path):
+        boss_files = os.listdir(boss_path)
+        for fname in boss_files:
             if fname.lower().endswith('.png'):
                 img = pygame.image.load(os.path.join(boss_path, fname)).convert_alpha()
                 img = pygame.transform.smoothscale(img, (64, 64))
                 sprite_dict[fname[:-4]] = img
-                print("Loaded boss sprites:", [fname[:-4] for fname in os.listdir(boss_path) if fname.lower().endswith('.png')])
+        print("Loaded boss sprites:", [fname[:-4] for fname in boss_files if fname.lower().endswith('.png')])
     return sprite_dict
 
 
