@@ -7,7 +7,7 @@ import random
 pygame.init()
 CELL_SIZE = 120  # Even larger
 GRID_W, GRID_H = 6, 6
-WIDTH, HEIGHT = CELL_SIZE * GRID_W + 80, CELL_SIZE * GRID_H + 400  # More width and height
+WIDTH, HEIGHT = CELL_SIZE * GRID_W + 80 + 320, CELL_SIZE * GRID_H + 400  # More width and height
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("DungeonGPT Roguelike")
 font = pygame.font.SysFont(None, 36)  # Larger font
@@ -67,10 +67,16 @@ input_text_color = (200, 255, 200)
 
 # --- Output State ---
 output_lines = ["Welcome to DungeonGPT! Type /help for commands."]
-max_output_lines = 12  # Increased from 4
+max_output_lines = 12  # Number of lines visible at once
+output_history_limit = 200  # Total lines to keep for scrolling
+output_scroll = 0  # Scroll offset
 output_area = pygame.Rect(0, HEIGHT-64-320, WIDTH, 320)  # Make output area taller
 output_color = (20, 20, 20)
 output_text_color = (255, 255, 180)
+
+# --- Stats Panel Setup ---
+STATS_PANEL_WIDTH = 320
+stats_panel = pygame.Rect(CELL_SIZE * GRID_W + 80, 0, STATS_PANEL_WIDTH, HEIGHT)
 
 # --- Text Wrapping Function ---
 def wrap_text(text, font, max_width):
@@ -102,7 +108,6 @@ while running:
                 if input_text.strip():
                     waiting = True
                     waiting_dots = 0
-                    # Process command using handle_command
                     try:
                         import io
                         import contextlib
@@ -110,21 +115,32 @@ while running:
                         with contextlib.redirect_stdout(buf):
                             state = handle_command(input_text.strip(), state, "gpt-4.1-mini", None)
                         narrative = buf.getvalue().strip()
-                        output_lines = [f"> {input_text.strip()}"]
+                        output_lines.append(f"> {input_text.strip()}")
                         if narrative:
                             for para in narrative.split('\n'):
                                 for line in wrap_text(para, output_font, output_area.width-32):
                                     output_lines.append(line)
                     except Exception as e:
-                        output_lines = [f"Error: {e}"]
-                    output_lines = output_lines[-max_output_lines:]
+                        output_lines.append(f"Error: {e}")
+                    # Limit history
+                    output_lines = output_lines[-output_history_limit:]
+                    output_scroll = 0  # Reset scroll to bottom
                     waiting = False
                 input_text = ""
             elif event.key == pygame.K_BACKSPACE:
                 input_text = input_text[:-1]
+            elif event.key == pygame.K_PAGEUP:
+                output_scroll = min(output_scroll + 1, max(0, len(output_lines) - max_output_lines))
+            elif event.key == pygame.K_PAGEDOWN:
+                output_scroll = max(output_scroll - 1, 0)
             else:
                 if len(event.unicode) == 1 and 32 <= ord(event.unicode) < 127:
                     input_text += event.unicode
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button == 4:  # Scroll up
+                output_scroll = min(output_scroll + 1, max(0, len(output_lines) - max_output_lines))
+            elif event.button == 5:  # Scroll down
+                output_scroll = max(output_scroll - 1, 0)
 
     screen.fill(BLACK)
     # --- Draw dungeon grid and connections ---
@@ -161,9 +177,16 @@ while running:
     # Draw output area with border
     pygame.draw.rect(screen, output_color, output_area, border_radius=12)
     pygame.draw.rect(screen, ROOM_BORDER, output_area, 2, border_radius=12)
-    for i, line in enumerate(output_lines[-max_output_lines:]):
+    start = max(0, len(output_lines) - max_output_lines - output_scroll)
+    end = start + max_output_lines
+    for i, line in enumerate(output_lines[start:end]):
         txt = output_font.render(line, True, output_text_color)
         screen.blit(txt, (output_area.x+16, output_area.y+12 + i*24))
+    # Draw scroll indicator
+    if len(output_lines) > max_output_lines:
+        scroll_bar_height = max(32, int(max_output_lines / len(output_lines) * output_area.height))
+        scroll_bar_y = int(output_area.y + (output_scroll / max(1, len(output_lines) - max_output_lines)) * (output_area.height - scroll_bar_height))
+        pygame.draw.rect(screen, (100, 100, 160), (output_area.right - 12, scroll_bar_y, 8, scroll_bar_height), border_radius=4)
     # Draw waiting indicator if needed
     if waiting:
         dots = '.' * ((pygame.time.get_ticks() // 400) % 4)
@@ -180,6 +203,28 @@ while running:
     cursor_height = txt_surface.get_height()
     if (pygame.time.get_ticks() // 500) % 2 == 0:  # Blinking cursor
         pygame.draw.line(screen, input_text_color, (cursor_x, cursor_y), (cursor_x, cursor_y + cursor_height), 3)
+    # Draw stats panel
+    pygame.draw.rect(screen, (28, 28, 40), stats_panel)
+    pygame.draw.rect(screen, ROOM_BORDER, stats_panel, 3)
+    stats_y = 24
+    stats_x = stats_panel.x + 24
+    p = state.player
+    stats_lines = [
+        f"HP: {p.hp}",
+        f"STR: {p.str}",
+        f"DEX: {p.dex}",
+        f"LVL: {p.level}",
+        f"XP: {p.xp}/{p.level*100}",
+        "",
+        "Inventory:",
+    ]
+    inv = p.inventory if p.inventory else ["(empty)"]
+    stats_lines.extend(inv)
+    for line in stats_lines:
+        txt = output_font.render(line, True, (220, 220, 255))
+        screen.blit(txt, (stats_x, stats_y))
+        stats_y += 32
+
     pygame.display.flip()
 
 pygame.quit()
