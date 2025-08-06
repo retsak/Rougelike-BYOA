@@ -77,6 +77,7 @@ class Player:
     hp: int = 20
     str: int = 4
     dex: int = 3
+    ability: str = None
     level: int = 1
     xp: int = 0
     inventory: List[str] = field(default_factory=list)
@@ -253,7 +254,7 @@ def get_api_call_counter():
 ########################################################################
 # 6. Engine Functions                                                 #
 ########################################################################
-META_CMDS = {"/save", "/load", "/quit", "/exit", "/stats", "/inventory", "/look", "/loot", "/map", "/help"}
+META_CMDS = {"/save", "/load", "/quit", "/exit", "/stats", "/inventory", "/look", "/loot", "/map", "/help", "/ability"}
 
 def handle_meta(cmd: str, state: GameState, save_file) -> bool:
     lc = cmd.lower()
@@ -274,7 +275,8 @@ def handle_meta(cmd: str, state: GameState, save_file) -> bool:
         return True
     if lc == "/stats":
         p = state.player
-        print(f"HP {p.hp} STR {p.str} DEX {p.dex} LVL {p.level} XP {p.xp}/{p.level*100}\n")
+        ability = f" Ability: {p.ability}" if p.ability else ""
+        print(f"HP {p.hp} STR {p.str} DEX {p.dex} LVL {p.level} XP {p.xp}/{p.level*100}{ability}\n")
         return True
     if lc == "/inventory":
         inv = state.player.inventory or ["(empty)"]
@@ -302,6 +304,40 @@ def handle_meta(cmd: str, state: GameState, save_file) -> bool:
         else:
             print("There is nothing to loot here.\n")
         return True
+    if lc == "/ability":
+        ability = getattr(state.player, "ability", None)
+        room = state.rooms[state.player.location]
+        living_enemies = [e for e in room["enemies"] if e.get("hp", 0) > 0]
+        if not ability:
+            print("You have no special ability.\n")
+        elif ability == "heal":
+            state.player.hp += 10
+            print("You channel divine power and heal 10 HP.\n")
+        elif ability == "shield_block":
+            state.player.hp += 5
+            print("You raise your shield and bolster your defenses, gaining 5 HP.\n")
+        elif not living_enemies:
+            print("No enemies to target with your ability.\n")
+        else:
+            enemy = living_enemies[0]
+            if ability == "fire_breath":
+                dmg = state.player.str + 5
+                for e in living_enemies:
+                    e["hp"] -= dmg
+                print(f"You breathe fire, dealing {dmg} damage to all foes!\n")
+            elif ability == "power_strike":
+                dmg = state.player.str * 2
+                enemy["hp"] -= dmg
+                print(f"You deliver a power strike for {dmg} damage!\n")
+            elif ability == "backstab":
+                dmg = state.player.dex * 2
+                enemy["hp"] -= dmg
+                print(f"You backstab {enemy['name']} for {dmg} damage!\n")
+            elif ability == "tongue_whip":
+                dmg = state.player.str + state.player.dex
+                enemy["hp"] -= dmg
+                print(f"You lash out with your tongue, dealing {dmg} damage!\n")
+        return True
     if lc == "/map":
         grid = [['#' for _ in range(6)] for _ in range(6)]
         for room in state.rooms.values():
@@ -323,6 +359,7 @@ Available commands:
   /loot         Pick up all items in the room
   /inventory    Show your inventory
   /stats        Show your stats
+  /ability      Use your hero's special ability
   /map          Show a map of the dungeon
   /save         Save your game
   /load         Load your game

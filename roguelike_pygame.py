@@ -283,6 +283,16 @@ def spawn_enemy(state):
     return state
 
 # --- Hero Selection Dialog ---
+# Mapping of hero names to stat blocks and abilities
+HERO_STATS = {
+    "Cleric": {"hp": 25, "str": 4, "dex": 3, "ability": "heal"},
+    "Dragon": {"hp": 35, "str": 8, "dex": 2, "ability": "fire_breath"},
+    "Fighter": {"hp": 30, "str": 6, "dex": 3, "ability": "power_strike"},
+    "Knight": {"hp": 28, "str": 5, "dex": 4, "ability": "shield_block"},
+    "Rogue": {"hp": 22, "str": 4, "dex": 6, "ability": "backstab"},
+    "Toad": {"hp": 18, "str": 3, "dex": 5, "ability": "tongue_whip"},
+}
+
 def select_hero():
     dialog_w, dialog_h = 700, 320
     dialog_x = (WIDTH - dialog_w) // 2
@@ -357,6 +367,12 @@ flash_timer = 0  # ms, for enemy encounter flash
 flash_duration = 200  # ms
 battle_dialog = None  # Holds enemy names if a battle dialog should be shown
 selected_hero = select_hero()
+# Apply selected hero stats to the player
+stats = HERO_STATS.get(selected_hero, {})
+player.hp = stats.get("hp", player.hp)
+player.str = stats.get("str", player.str)
+player.dex = stats.get("dex", player.dex)
+player.ability = stats.get("ability")
 player_icon = hero_sprites[selected_hero]
 # Ensure battle_options is defined before use
 battle_options = None
