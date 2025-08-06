@@ -5,6 +5,7 @@ import random
 import copy
 import os
 import time  # Import time module for timeout logic
+import json
 
 # Ensure OpenAI API key is set
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -533,8 +534,40 @@ while running:
             import contextlib
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                state = handle_command(pending_command, state, "gpt-4.1-mini", None)
-            narrative = buf.getvalue().strip()
+                result = handle_command(pending_command, state, "gpt-4.1-mini", None)
+            narrative = ""
+            options = []
+            force_option_select = False
+            state_delta = None
+            if isinstance(result, dict):
+                narrative = result.get('narrative', '')
+                options = result.get('options', [])
+                force_option_select = result.get('force_option_select', False)
+                state_delta = result.get('state_delta', None)
+                if not options:
+                    for line in narrative.split('\n'):
+                        if line.strip().startswith(tuple(str(i)+'.' for i in range(1,10))):
+                            options.append(line.strip())
+            elif isinstance(result, str):
+                try:
+                    parsed = json.loads(result)
+                    narrative = parsed.get('narrative', '')
+                    options = parsed.get('options', [])
+                    force_option_select = parsed.get('force_option_select', False)
+                    state_delta = parsed.get('state_delta', None)
+                    if not options:
+                        for line in narrative.split('\n'):
+                            if line.strip().startswith(tuple(str(i)+'.' for i in range(1,10))):
+                                options.append(line.strip())
+                except Exception:
+                    narrative = result
+            else:
+                narrative = "(No narrative returned)"
+            # Apply state_delta if present (sync HP, location, etc)
+            if state_delta and isinstance(state_delta, dict):
+                if 'player' in state_delta and isinstance(state_delta['player'], dict):
+                    for k, v in state_delta['player'].items():
+                        setattr(state.player, k, v)
             # Clear output area before showing new response
             output_lines = []
             output_lines.append(f"> {pending_command}")
@@ -542,14 +575,12 @@ while running:
                 for para in narrative.split('\n'):
                     for line in wrap_text(para, output_font, output_area.width-32):
                         output_lines.append(line)
-            # --- Parse options for battle dialog ---
-            options = []
-            for line in narrative.split('\n'):
-                if line.strip().startswith(tuple(str(i)+'.' for i in range(1,10))):
-                    options.append(line.strip())
             battle_options = options if options else None
+            battle_force_select = force_option_select if options else False
         except Exception as e:
             output_lines = [f"Error: {e}"]
+            battle_options = None
+            battle_force_select = False
         output_lines = output_lines[-output_history_limit:]
         output_scroll = 0
         input_text = ""  # Clear input after response
@@ -567,6 +598,55 @@ while running:
             battle_dialog = enemy_names
         waiting = False
         pending_command = None
+        # --- Game Over Check ---
+        if state.player.hp <= 0:
+            # Show Game Over dialog
+            dialog_w, dialog_h = 480, 220
+            dialog_x = (WIDTH - dialog_w) // 2
+            dialog_y = (HEIGHT - dialog_h) // 2
+            dialog_rect = pygame.Rect(dialog_x, dialog_y, dialog_w, dialog_h)
+            pygame.draw.rect(screen, (40,0,0), dialog_rect, border_radius=18)
+            pygame.draw.rect(screen, (255,80,80), dialog_rect, 4, border_radius=18)
+            title = font.render("Game Over!", True, (255,255,255))
+            screen.blit(title, (dialog_x + dialog_w//2 - title.get_width()//2, dialog_y + 32))
+            msg = output_font.render("You have perished in the dungeon.", True, (255,200,200))
+            screen.blit(msg, (dialog_x + dialog_w//2 - msg.get_width()//2, dialog_y + 80))
+            # Draw buttons
+            btns = []
+            btn_labels = ["Play Again", "Exit"]
+            for i, label in enumerate(btn_labels):
+                btn_w, btn_h = 180, 48
+                btn_rect = pygame.Rect(dialog_x + 40 + i*220, dialog_y + dialog_h - btn_h - 32, btn_w, btn_h)
+                pygame.draw.rect(screen, (60,60,120), btn_rect, border_radius=12)
+                pygame.draw.rect(screen, (120,120,200), btn_rect, 2, border_radius=12)
+                btn_txt = font.render(label, True, (255,255,255))
+                screen.blit(btn_txt, (btn_rect.centerx - btn_txt.get_width()//2, btn_rect.centery - btn_txt.get_height()//2))
+                btns.append((btn_rect, label))
+            pygame.display.flip()
+            # Wait for button click
+            game_over = True
+            while game_over:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        pygame.quit()
+                        sys.exit()
+                    elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        mx, my = pygame.mouse.get_pos()
+                        for btn_rect, label in btns:
+                            if btn_rect.collidepoint(mx, my):
+                                if label == "Play Again":
+                                    # Reset game state
+                                    seed = random.randint(1, 999999)
+                                    rooms = generate_grid_dungeon(seed, GRID_W, GRID_H)
+                                    player = Player(location="room_0")
+                                    state = GameState(seed=seed, rooms=rooms, player=player)
+                                    selected_hero = select_hero()
+                                    player_icon = hero_sprites[selected_hero]
+                                    game_over = False
+                                elif label == "Exit":
+                                    pygame.quit()
+                                    sys.exit()
+            continue  # Skip rest of loop after game over
 
     # After setting pending_command, immediately process the command
     if pending_command:
@@ -576,21 +656,51 @@ while running:
             import contextlib
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                state = handle_command(pending_command, state, "gpt-4.1-mini", None)
-            narrative = buf.getvalue().strip()
+                result = handle_command(pending_command, state, "gpt-4.1-mini", None)
+            narrative = ""
+            options = []
+            force_option_select = False
+            state_delta = None
+            if isinstance(result, dict):
+                narrative = result.get('narrative', '')
+                options = result.get('options', [])
+                force_option_select = result.get('force_option_select', False)
+                state_delta = result.get('state_delta', None)
+                if not options:
+                    for line in narrative.split('\n'):
+                        if line.strip().startswith(tuple(str(i)+'.' for i in range(1,10))):
+                            options.append(line.strip())
+            elif isinstance(result, str):
+                try:
+                    parsed = json.loads(result)
+                    narrative = parsed.get('narrative', '')
+                    options = parsed.get('options', [])
+                    force_option_select = parsed.get('force_option_select', False)
+                    state_delta = parsed.get('state_delta', None)
+                    if not options:
+                        for line in narrative.split('\n'):
+                            if line.strip().startswith(tuple(str(i)+'.' for i in range(1,10))):
+                                options.append(line.strip())
+                except Exception:
+                    narrative = result
+            else:
+                narrative = "(No narrative returned)"
+            if state_delta and isinstance(state_delta, dict):
+                if 'player' in state_delta and isinstance(state_delta['player'], dict):
+                    for k, v in state_delta['player'].items():
+                        setattr(state.player, k, v)
             output_lines = []
             output_lines.append(f"> {pending_command}")
             if narrative:
                 for para in narrative.split('\n'):
                     for line in wrap_text(para, output_font, output_area.width-32):
                         output_lines.append(line)
-            options = []
-            for line in narrative.split('\n'):
-                if line.strip().startswith(tuple(str(i)+'.' for i in range(1,10))):
-                    options.append(line.strip())
             battle_options = options if options else None
+            battle_force_select = force_option_select if options else False
         except Exception as e:
             output_lines = [f"Error: {e}"]
+            battle_options = None
+            battle_force_select = False
         output_lines = output_lines[-output_history_limit:]
         output_scroll = 0
         input_text = ""
@@ -606,90 +716,54 @@ while running:
         else:
             battle_dialog = None
             battle_options = None
+            battle_force_select = False
         waiting = False
         pending_command = None
-        continue  # Skip the rest of the loop to avoid double-processing
-
-    # Draw flash overlay if needed
-    if flash_timer and pygame.time.get_ticks() < flash_timer:
-        s = pygame.Surface((WIDTH, HEIGHT))
-        s.set_alpha(200)
-        s.fill((255,255,255))
-        screen.blit(s, (0,0))
-        pygame.display.flip()
-    elif flash_timer and pygame.time.get_ticks() >= flash_timer:
-        flash_timer = 0
-
-    # Draw battle dialog and options if needed
-    if battle_dialog:
-        dialog_w, dialog_h = 600, 180 + (len(battle_options or []) * 56)
-        dialog_x = (WIDTH - dialog_w) // 2
-        dialog_y = (HEIGHT - dialog_h) // 2
-        dialog_rect = pygame.Rect(dialog_x, dialog_y, dialog_w, dialog_h)
-        pygame.draw.rect(screen, (30,30,60), dialog_rect, border_radius=18)
-        pygame.draw.rect(screen, (200,200,255), dialog_rect, 4, border_radius=18)
-        msg = f"A wild {', '.join(battle_dialog)} appears!"
-        msg_lines = wrap_text(msg, font, dialog_w-40)
-        for i, line in enumerate(msg_lines):
-            txt = font.render(line, True, (255,255,255))
-            screen.blit(txt, (dialog_x+24, dialog_y+32 + i*38))
-        # Draw options as buttons
-        btns = []
-        if battle_options:
-            for i, opt in enumerate(battle_options):
-                btn_w, btn_h = 520, 44
-                # Wrap option text for button
-                wrapped_lines = wrap_text(opt, output_font, btn_w - 32)
-                btn_height = 28 * len(wrapped_lines) + 16
-                btn_rect = pygame.Rect(dialog_x + 40, dialog_y + 100 + i*56, btn_w, btn_height)
-                pygame.draw.rect(screen, (60,120,60), btn_rect, border_radius=10)
-                pygame.draw.rect(screen, (120,200,120), btn_rect, 2, border_radius=10)
-                for j, line in enumerate(wrapped_lines):
-                    btn_txt = output_font.render(line, True, (255,255,255))
-                    screen.blit(btn_txt, (btn_rect.x + 16, btn_rect.y + 8 + j*28))
-                btns.append((btn_rect, opt))
+        # --- Game Over Check ---
+        if state.player.hp <= 0:
+            dialog_w, dialog_h = 480, 220
+            dialog_x = (WIDTH - dialog_w) // 2
+            dialog_y = (HEIGHT - dialog_h) // 2
+            dialog_rect = pygame.Rect(dialog_x, dialog_y, dialog_w, dialog_h)
+            pygame.draw.rect(screen, (40,0,0), dialog_rect, border_radius=18)
+            pygame.draw.rect(screen, (255,80,80), dialog_rect, 4, border_radius=18)
+            title = font.render("Game Over!", True, (255,255,255))
+            screen.blit(title, (dialog_x + dialog_w//2 - title.get_width()//2, dialog_y + 32))
+            msg = output_font.render("You have perished in the dungeon.", True, (255,200,200))
+            screen.blit(msg, (dialog_x + dialog_w//2 - msg.get_width()//2, dialog_y + 80))
+            btns = []
+            btn_labels = ["Play Again", "Exit"]
+            for i, label in enumerate(btn_labels):
+                btn_w, btn_h = 180, 48
+                btn_rect = pygame.Rect(dialog_x + 40 + i*220, dialog_y + dialog_h - btn_h - 32, btn_w, btn_h)
+                pygame.draw.rect(screen, (60,60,120), btn_rect, border_radius=12)
+                pygame.draw.rect(screen, (120,120,200), btn_rect, 2, border_radius=12)
+                btn_txt = font.render(label, True, (255,255,255))
+                screen.blit(btn_txt, (btn_rect.centerx - btn_txt.get_width()//2, btn_rect.centery - btn_txt.get_height()//2))
+                btns.append((btn_rect, label))
             pygame.display.flip()
-            # Wait for button click or Enter
-            waiting_for_choice = True
-            while waiting_for_choice:
+            game_over = True
+            while game_over:
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         pygame.quit()
                         sys.exit()
-                    elif event.type == pygame.KEYDOWN and (event.key == pygame.K_RETURN or event.key == pygame.K_SPACE):
-                        # Default to first option
-                        pending_command = battle_options[0]
-                        waiting_for_choice = False
                     elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                         mx, my = pygame.mouse.get_pos()
-                        for btn_rect, opt in btns:
+                        for btn_rect, label in btns:
                             if btn_rect.collidepoint(mx, my):
-                                pending_command = opt
-                                waiting_for_choice = False
-        else:
-            # Draw Continue button if no options
-            btn_w, btn_h = 180, 48
-            btn_rect = pygame.Rect(dialog_x + dialog_w//2 - btn_w//2, dialog_y + dialog_h - btn_h - 16, btn_w, btn_h)
-            pygame.draw.rect(screen, (60,120,60), btn_rect, border_radius=12)
-            pygame.draw.rect(screen, (120,200,120), btn_rect, 2, border_radius=12)
-            btn_txt = font.render("Continue", True, (255,255,255))
-            screen.blit(btn_txt, (btn_rect.centerx - btn_txt.get_width()//2, btn_rect.centery - btn_txt.get_height()//2))
-            pygame.display.flip()
-            # Wait for click or Enter
-            waiting_for_continue = True
-            while waiting_for_continue:
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        pygame.quit()
-                        sys.exit()
-                    elif event.type == pygame.KEYDOWN and (event.key == pygame.K_RETURN or event.key == pygame.K_SPACE):
-                        waiting_for_continue = False
-                    elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                        mx, my = pygame.mouse.get_pos()
-                        if btn_rect.collidepoint(mx, my):
-                            waiting_for_continue = False
-        battle_dialog = None
-        battle_options = None
+                                if label == "Play Again":
+                                    seed = random.randint(1, 999999)
+                                    rooms = generate_grid_dungeon(seed, GRID_W, GRID_H)
+                                    player = Player(location="room_0")
+                                    state = GameState(seed=seed, rooms=rooms, player=player)
+                                    selected_hero = select_hero()
+                                    player_icon = hero_sprites[selected_hero]
+                                    game_over = False
+                                elif label == "Exit":
+                                    pygame.quit()
+                                    sys.exit()
+            continue
 
 pygame.quit()
 sys.exit()

@@ -329,13 +329,13 @@ Available commands:
         return True
     return False
 
-def handle_command(cmd: str, state: GameState, model: str, save_file=None) -> GameState:
+def handle_command(cmd: str, state: GameState, model: str, save_file=None) -> dict:
     old_location = state.player.location if hasattr(state.player, 'location') else None
     if cmd.startswith("/"):
         if handle_meta(cmd, state, save_file):
-            return state
+            return {"narrative": "", "state_delta": {}}
         print("[!] Unknown command:", cmd)
-        return state
+        return {"narrative": "[!] Unknown command.", "state_delta": {}}
     openai_resp = call_openai(state, cmd, model)
     narrative, state_delta = openai_resp["narrative"], openai_resp["state_delta"]
     # --- Memory: append to history ---
@@ -352,26 +352,24 @@ def handle_command(cmd: str, state: GameState, model: str, save_file=None) -> Ga
             state.player['location'] = old_location
         state.player = Player(**state.player)
     elif not isinstance(state.player, Player):
-        # Fallback: try to convert if possible
         try:
             state.player = Player(**dict(state.player))
         except Exception:
             pass
-
     # --- Enemy reaction logic ---
     room = state.rooms[state.player.location]
     living_enemies = [e for e in room["enemies"] if e.get("hp", 0) > 0]
-    # Only trigger if not attacking or fleeing
     if living_enemies and not any(x in cmd.lower() for x in ["attack", "flee"]):
-        # Apply damage from first living enemy
         enemy = living_enemies[0]
         dmg = max(1, enemy["str"])
         state.player.hp -= dmg
         narrative += f"\nThe {enemy['name']} attacks you for {dmg} damage as you ignore it!"
-        # Also reflect in state_delta for UI
         if "hp" in state_delta:
             state_delta["hp"] -= dmg
         else:
             state_delta["hp"] = state.player.hp
     print(narrative)
-    return state
+    # Return the full OpenAI response dict, plus any modifications
+    openai_resp["narrative"] = narrative
+    openai_resp["state_delta"] = state_delta
+    return openai_resp
