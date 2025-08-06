@@ -303,11 +303,18 @@ def animate_d20_roll(screen, font, roll_result):
 
 # --- Integrate D20 Roll into Attack Logic ---
 def attack_enemy(state, enemy):
+    """Roll a d20 and apply damage to the given enemy.
+
+    Returns a tuple of (message, roll_result) so the caller can display the
+    roll in the output area and forward the result to the AI for consistent
+    narration.
+    """
     roll_result = roll_d20()
     animate_d20_roll(screen, font, roll_result)
     damage = roll_result + state.player.str  # Example: Add player's strength to roll
     enemy["hp"] -= damage
-    return f"You rolled a {roll_result} and dealt {damage} damage to {enemy['name']}!"
+    msg = f"You rolled a {roll_result} and dealt {damage} damage to {enemy['name']}!"
+    return msg, roll_result
 
 # --- Main Loop ---
 running = True
@@ -531,12 +538,38 @@ while running:
     # Process pending command after waiting indicator is shown
     if waiting and pending_command:
         prev_location = state.player.location
+        roll_result_to_send = None
+        output_lines = [f"> {pending_command}"]
+        if battle_options:
+            cmd_lower = pending_command.lower()
+            selected_option = None
+            if cmd_lower.isdigit():
+                idx = int(cmd_lower) - 1
+                if 0 <= idx < len(battle_options):
+                    selected_option = battle_options[idx]
+            else:
+                for opt in battle_options:
+                    if cmd_lower in opt.lower():
+                        selected_option = opt
+                        break
+            if selected_option and "attack" in selected_option.lower():
+                room = state.rooms.get(state.player.location, {})
+                target_enemy = next((e for e in room.get('enemies', []) if e.get('hp', 0) > 0), None)
+                if target_enemy:
+                    atk_msg, roll_result_to_send = attack_enemy(state, target_enemy)
+                    for line in wrap_text(atk_msg, output_font, output_area.width-32):
+                        output_lines.append(line)
+                    if target_enemy["hp"] <= 0:
+                        room["enemies"].remove(target_enemy)
+                        state.player.give_xp(target_enemy.get("xp", 0))
+                        output_lines.append(f"The {target_enemy['name'].replace('_', ' ')} is defeated!")
+                pending_command = "attack"
         try:
             import io
             import contextlib
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                result = handle_command(pending_command, state, "gpt-4.1-mini", None)
+                result = handle_command(pending_command, state, "gpt-4.1-mini", roll_result_to_send, None)
             narrative = ""
             options = []
             force_option_select = False
@@ -565,14 +598,10 @@ while running:
                     narrative = result
             else:
                 narrative = "(No narrative returned)"
-            # Apply state_delta if present (sync HP, location, etc)
             if state_delta and isinstance(state_delta, dict):
                 if 'player' in state_delta and isinstance(state_delta['player'], dict):
                     for k, v in state_delta['player'].items():
                         setattr(state.player, k, v)
-            # Clear output area before showing new response
-            output_lines = []
-            output_lines.append(f"> {pending_command}")
             if narrative:
                 for para in narrative.split('\n'):
                     for line in wrap_text(para, output_font, output_area.width-32):
@@ -580,7 +609,7 @@ while running:
             battle_options = options if options else None
             battle_force_select = force_option_select if options else False
         except Exception as e:
-            output_lines = [f"Error: {e}"]
+            output_lines.append(f"Error: {e}")
             battle_options = None
             battle_force_select = False
         output_lines = output_lines[-output_history_limit:]
@@ -653,12 +682,38 @@ while running:
     # After setting pending_command, immediately process the command
     if pending_command:
         prev_location = state.player.location
+        roll_result_to_send = None
+        output_lines = [f"> {pending_command}"]
+        if battle_options:
+            cmd_lower = pending_command.lower()
+            selected_option = None
+            if cmd_lower.isdigit():
+                idx = int(cmd_lower) - 1
+                if 0 <= idx < len(battle_options):
+                    selected_option = battle_options[idx]
+            else:
+                for opt in battle_options:
+                    if cmd_lower in opt.lower():
+                        selected_option = opt
+                        break
+            if selected_option and "attack" in selected_option.lower():
+                room = state.rooms.get(state.player.location, {})
+                target_enemy = next((e for e in room.get('enemies', []) if e.get('hp', 0) > 0), None)
+                if target_enemy:
+                    atk_msg, roll_result_to_send = attack_enemy(state, target_enemy)
+                    for line in wrap_text(atk_msg, output_font, output_area.width-32):
+                        output_lines.append(line)
+                    if target_enemy["hp"] <= 0:
+                        room["enemies"].remove(target_enemy)
+                        state.player.give_xp(target_enemy.get("xp", 0))
+                        output_lines.append(f"The {target_enemy['name'].replace('_', ' ')} is defeated!")
+                pending_command = "attack"
         try:
             import io
             import contextlib
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                result = handle_command(pending_command, state, "gpt-4.1-mini", None)
+                result = handle_command(pending_command, state, "gpt-4.1-mini", roll_result_to_send, None)
             narrative = ""
             options = []
             force_option_select = False
@@ -691,8 +746,6 @@ while running:
                 if 'player' in state_delta and isinstance(state_delta['player'], dict):
                     for k, v in state_delta['player'].items():
                         setattr(state.player, k, v)
-            output_lines = []
-            output_lines.append(f"> {pending_command}")
             if narrative:
                 for para in narrative.split('\n'):
                     for line in wrap_text(para, output_font, output_area.width-32):
@@ -700,7 +753,7 @@ while running:
             battle_options = options if options else None
             battle_force_select = force_option_select if options else False
         except Exception as e:
-            output_lines = [f"Error: {e}"]
+            output_lines.append(f"Error: {e}")
             battle_options = None
             battle_force_select = False
         output_lines = output_lines[-output_history_limit:]
