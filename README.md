@@ -68,13 +68,18 @@ You can also run DungeonGPT in a Google Colab notebook:
    import os
    os.environ["OPENAI_API_KEY"] = "sk-..."
    ```
-4. **Run the game script:**
+4. **Use the library in a notebook cell** (`roguelike_ai.py` contains only library code and isn't executable on its own):
    ```python
-   !python roguelike_ai.py --seed 1337
+   from roguelike_ai import generate_dungeon, GameState, Player
+
+   rooms = generate_dungeon(seed=1337)
+   state = GameState(seed=1337, rooms=rooms, player=Player())
+   print(state.to_json())
    ```
 
 **Note:**
-- Colab notebooks are not ideal for interactive input. For best results, use the script in a terminal. If you want to play in Colab, you may need to adapt the code to use notebook cells for input/output.
+- `roguelike_ai.py` functions solely as a library. To play the game, run `roguelike_pygame.py` locally on a machine with a display.
+- Colab notebooks are not ideal for interactive input or graphics. If you want to experiment in Colab, adapt the code to use notebook cells for input/output.
 - The game requires an internet connection and a valid OpenAI API key.
 
 ## Commands
