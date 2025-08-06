@@ -3,6 +3,7 @@ import sys
 from roguelike_ai import generate_dungeon, Player, GameState, handle_command, ROOM_TYPES, ENEMIES, LOOT_TABLE
 import random
 import copy
+import os
 
 # --- Pygame Setup ---
 pygame.init()
@@ -98,6 +99,55 @@ def wrap_text(text, font, max_width):
         lines.append(current)
     return lines
 
+# --- Load Enemy Sprites ---
+def load_enemy_sprites():
+    sprite_dict = {}
+    # Load basic enemy sprites
+    basic_path = 'assets/basic enemies'
+    for fname in os.listdir(basic_path):
+        if fname.lower().endswith('.png'):
+            img = pygame.image.load(os.path.join(basic_path, fname)).convert_alpha()
+            img = pygame.transform.smoothscale(img, (48, 48))
+            sprite_dict[fname[:-4]] = img  # key is filename without .png
+    # Load boss enemy sprites
+    boss_path = 'assets/bosses'
+    if os.path.exists(boss_path):
+        for fname in os.listdir(boss_path):
+            if fname.lower().endswith('.png'):
+                img = pygame.image.load(os.path.join(boss_path, fname)).convert_alpha()
+                img = pygame.transform.smoothscale(img, (64, 64))
+                sprite_dict[fname[:-4]] = img
+    return sprite_dict
+
+enemy_sprites = load_enemy_sprites()
+
+# --- Load Hero Sprites ---
+def load_hero_sprites():
+    hero_dict = {}
+    hero_path = 'assets/Hero'
+    for fname in os.listdir(hero_path):
+        if fname.lower().endswith('.png'):
+            img = pygame.image.load(os.path.join(hero_path, fname)).convert_alpha()
+            img = pygame.transform.smoothscale(img, (64, 64))
+            hero_dict[fname[:-4]] = img  # key is filename without .png
+    return hero_dict
+
+hero_sprites = load_hero_sprites()
+
+# --- Load Backgrounds ---
+def load_backgrounds():
+    bg_list = []
+    bg_path = 'assets/Backgrounds'
+    for fname in os.listdir(bg_path):
+        if fname.lower().endswith('.png'):
+            img = pygame.image.load(os.path.join(bg_path, fname)).convert()
+            img = pygame.transform.smoothscale(img, (WIDTH, HEIGHT))
+            bg_list.append(img)
+    return bg_list
+
+backgrounds = load_backgrounds()
+selected_bg = random.choice(backgrounds) if backgrounds else None
+
 # --- Enemy Movement and Spawning Helpers ---
 def move_non_boss_enemies(state):
     grid_w, grid_h = GRID_W, GRID_H
@@ -147,14 +197,53 @@ def spawn_enemy(state):
     room_id = random.choice(possible_rooms)
     name = random.choice([k for k in ENEMIES if k != 'dungeon_boss'])
     enemy = {**ENEMIES[name], 'name': name}
+    # Assign a random sprite for this enemy
+    sprite_keys = [k for k in enemy_sprites if name in k]
+    if sprite_keys:
+        enemy['sprite'] = random.choice(sprite_keys)
+    else:
+        enemy['sprite'] = None
     new_rooms = copy.deepcopy(state.rooms)
     new_rooms[room_id]['enemies'].append(enemy)
     state.rooms = new_rooms
     return state
 
-# --- Load Enemy Sprites ---
-slime_img = pygame.image.load('assets/basic enemies/slime.png').convert_alpha()
-slime_img = pygame.transform.smoothscale(slime_img, (48, 48))
+# --- Hero Selection Dialog ---
+def select_hero():
+    dialog_w, dialog_h = 700, 320
+    dialog_x = (WIDTH - dialog_w) // 2
+    dialog_y = (HEIGHT - dialog_h) // 2
+    dialog_rect = pygame.Rect(dialog_x, dialog_y, dialog_w, dialog_h)
+    pygame.draw.rect(screen, (30,30,60), dialog_rect, border_radius=18)
+    pygame.draw.rect(screen, (200,200,255), dialog_rect, 4, border_radius=18)
+    title = font.render("Choose Your Hero", True, (255,255,255))
+    screen.blit(title, (dialog_x + dialog_w//2 - title.get_width()//2, dialog_y + 24))
+    hero_keys = list(hero_sprites.keys())
+    spacing = dialog_w // max(1, len(hero_keys))
+    btn_rects = []
+    for i, key in enumerate(hero_keys):
+        img = hero_sprites[key]
+        img_rect = img.get_rect(center=(dialog_x + spacing//2 + i*spacing, dialog_y + 120))
+        screen.blit(img, img_rect)
+        label = output_font.render(key.title(), True, (255,255,255))
+        screen.blit(label, (img_rect.centerx - label.get_width()//2, img_rect.bottom + 8))
+        btn_rects.append(img_rect)
+    pygame.display.flip()
+    # Wait for click
+    selecting = True
+    selected_key = None
+    while selecting:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                mx, my = pygame.mouse.get_pos()
+                for i, rect in enumerate(btn_rects):
+                    if rect.collidepoint(mx, my):
+                        selected_key = hero_keys[i]
+                        selecting = False
+    return selected_key
 
 # --- Main Loop ---
 running = True
@@ -164,6 +253,8 @@ pending_command = None  # Holds command to process after waiting indicator is sh
 flash_timer = 0  # ms, for enemy encounter flash
 flash_duration = 200  # ms
 battle_dialog = None  # Holds enemy names if a battle dialog should be shown
+selected_hero = select_hero()
+player_icon = hero_sprites[selected_hero]
 while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -214,19 +305,27 @@ while running:
         # Draw enemy marker if enemies present
         for enemy in room["enemies"]:
             ex, ey = x*CELL_SIZE + CELL_SIZE//2, y*CELL_SIZE + CELL_SIZE//2
-            if enemy['name'] == 'slime':
-                img_rect = slime_img.get_rect(center=(ex, ey))
-                screen.blit(slime_img, img_rect)
+            sprite_key = enemy.get('sprite')
+            if sprite_key and sprite_key in enemy_sprites:
+                img_rect = enemy_sprites[sprite_key].get_rect(center=(ex, ey))
+                screen.blit(enemy_sprites[sprite_key], img_rect)
+            elif enemy['name'] == 'slime' and 'slime' in enemy_sprites:
+                img_rect = enemy_sprites['slime'].get_rect(center=(ex, ey))
+                screen.blit(enemy_sprites['slime'], img_rect)
             else:
                 pygame.draw.circle(screen, (220, 60, 60), (ex, ey), 18)
                 e_txt = output_font.render("E", True, (255,255,255))
                 screen.blit(e_txt, (ex - e_txt.get_width()//2, ey - e_txt.get_height()//2))
-    # Draw player with glow
+    # Draw player with hero icon
     px, py = state.rooms[state.player.location]["coords"]
     prect = pygame.Rect(px*CELL_SIZE+28, py*CELL_SIZE+28, CELL_SIZE-56, CELL_SIZE-56)
     glow_rect = prect.inflate(24, 24)
     pygame.draw.ellipse(screen, (80,180,255,80), glow_rect)
-    pygame.draw.ellipse(screen, BLUE, prect)
+    if player_icon:
+        img_rect = player_icon.get_rect(center=prect.center)
+        screen.blit(player_icon, img_rect)
+    else:
+        pygame.draw.ellipse(screen, BLUE, prect)
     # Draw room type text
     for room in state.rooms.values():
         x, y = room["coords"]

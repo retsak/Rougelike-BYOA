@@ -123,15 +123,60 @@ def generate_dungeon(seed: int, n_rooms: int = 12) -> Dict[str, dict]:
 ########################################################################
 # 5. OpenAI Narration Layer                                           #
 ########################################################################
-RULES = {"core_stats": ["hp", "str", "dex", "level", "xp"], "dice": "d20", "actions": ["move", "look", "attack", "loot", "inventory", "use"], "engine_authority": "Always trust state_delta"}
+RULES = {
+    # Core character stats the engine persists
+    "core_stats": ["hp", "str", "dex", "level", "xp"],
+
+    # Default die for contested rolls
+    "dice": "d20",
+
+    # Actions the player may type (you can still suggest colourful synonyms in narration)
+    "actions": [
+        "move", "look", "attack", "loot",
+        "inventory", "use",
+        "flee",          # disengage & move in the same turn
+        "equip"          # swap weapons / armour
+    ],
+
+    # Combat & hazard logic the DM must enforce
+    "combat": {
+        # Order is always Player ➜ Enemies
+        "turn_order": "player_then_enemies",
+
+        # If the player tries to leave a tile that still contains a living enemy
+        # the enemy gains an automatic “opportunity attack”.
+        "opportunity_attack": True,
+
+        # If the player **ignores** a living enemy (any action other than
+        # attack / flee while sharing a tile), the enemy makes a free attack.
+        "auto_damage_on_ignore": True
+    },
+
+    # The front-end/game engine is the single source of truth
+    "engine_authority": "Always trust state_delta"
+}
+
 SYSTEM_PROMPT = (
-    "You are DungeonGPT, a classic Dungeons & Dragons Dungeon Master. "
-    "Narrate the world, describe what the player sees, hears, and feels. "
-    "Offer vivid choices, suggest actions, and roleplay NPCs. "
-    "Always give the player clear directions and options. "
-    "Keep track of the story so far. "
-    "Return JSON with 'narrative' and 'state_delta'. Use vivid second-person. "
-    "Never reveal dice rolls or hidden data. Rules: " + json.dumps(RULES)
+    "You are **DungeonGPT**, a seasoned Dungeons & Dragons Dungeon Master. "
+    "You actively direct the player, offering clear choices, warnings, and suggestions for what to do next. "
+    "Describe the world in vivid second-person prose—what the player sees, hears, and feels. "
+    "Role-play NPCs and monsters, and always keep the pacing brisk. "
+    "If the player is in danger, warn them and suggest defensive or clever actions. "
+    "If the player ignores or moves away from a hostile creature, narrate the enemy's reaction and the consequences (damage, attacks, etc.). "
+    "Always offer at least two possible actions or directions after each turn. "
+
+    "### Strict Gameplay Rules\n"
+    "• Always apply the rules in the JSON `RULES` block above.\n"
+    "• After every player action, resolve enemy reactions automatically.  \n"
+    "    – If the player ignores or moves away from a hostile creature that is still alive, "
+    "      the creature immediately attacks (deal damage in `state_delta`).\n"
+    "• Never reveal hidden information or raw die rolls—only outcomes.\n"
+    "• Output **JSON** with two top-level keys:\n"
+    "    1. `narrative`: rich, immersive description for the player, including consequences and next steps.\n"
+    "    2. `state_delta`: exact stat/position/flag changes caused this turn.\n"
+    "• The client UI will merge `state_delta` into authoritative game state—treat it as truth.\n"
+
+    "Stay consistent, keep tension high, and remember: an un-dealt-with enemy is a stabbing you owe the player."
 )
 
 def call_openai(state: GameState, cmd: str, model: str) -> dict:
@@ -261,5 +306,21 @@ def handle_command(cmd: str, state: GameState, model: str, save_file=None) -> Ga
         state.player = Player(**state.player)
     elif hasattr(state.player, 'location') and not getattr(state.player, 'location', None):
         state.player.location = old_location
+
+    # --- Enemy reaction logic ---
+    room = state.rooms[state.player.location]
+    living_enemies = [e for e in room["enemies"] if e.get("hp", 0) > 0]
+    # Only trigger if not attacking or fleeing
+    if living_enemies and not any(x in cmd.lower() for x in ["attack", "flee"]):
+        # Apply damage from first living enemy
+        enemy = living_enemies[0]
+        dmg = max(1, enemy["str"])
+        state.player.hp -= dmg
+        narrative += f"\nThe {enemy['name']} attacks you for {dmg} damage as you ignore it!"
+        # Also reflect in state_delta for UI
+        if "hp" in state_delta:
+            state_delta["hp"] -= dmg
+        else:
+            state_delta["hp"] = state.player.hp
     print(narrative)
     return state

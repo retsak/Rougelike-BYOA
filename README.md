@@ -95,5 +95,8 @@ You can also type natural language commands (e.g., `Go north`, `Attack the gobli
 - The virtual environment (`.venv`) is provided but you must install `openai` yourself.
 - The default model is `gpt-4.1-mini` (change with `--model` if needed).
 
+## Credits
+- Some visual assets and inspiration from [2-Minute Tabletop](https://tools.2minutetabletop.com/)
+
 ## License
 MIT
