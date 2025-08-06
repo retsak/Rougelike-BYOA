@@ -2,6 +2,7 @@ import pygame
 import sys
 from roguelike_ai import generate_dungeon, Player, GameState, handle_command, ROOM_TYPES, ENEMIES, LOOT_TABLE
 import random
+import copy
 
 # --- Pygame Setup ---
 pygame.init()
@@ -58,10 +59,15 @@ YELLOW = (255, 220, 80)
 ROOM_BORDER = (180, 180, 220)
 CONNECTION = (60, 60, 120)
 
+# --- Stats Panel Setup ---
+STATS_PANEL_WIDTH = 320
+stats_panel = pygame.Rect(CELL_SIZE * GRID_W + 80, 0, STATS_PANEL_WIDTH, HEIGHT)
+
 # --- Text Input State ---
 input_text = ""
 input_active = True
-input_box = pygame.Rect(0, HEIGHT-64, WIDTH, 64)  # Taller input box
+input_box_width = stats_panel.left - 8  # Leave margin before stats panel
+input_box = pygame.Rect(0, HEIGHT-64, input_box_width, 64)  # Adjusted width
 input_color = (30, 30, 30)
 input_text_color = (200, 255, 200)
 
@@ -70,13 +76,10 @@ output_lines = ["Welcome to DungeonGPT! Type /help for commands."]
 max_output_lines = 12  # Number of lines visible at once
 output_history_limit = 200  # Total lines to keep for scrolling
 output_scroll = 0  # Scroll offset
-output_area = pygame.Rect(0, HEIGHT-64-320, WIDTH, 320)  # Make output area taller
+output_area_width = stats_panel.left - 8  # Match input box width
+output_area = pygame.Rect(0, HEIGHT-64-320, output_area_width, 320)  # Make output area taller
 output_color = (20, 20, 20)
 output_text_color = (255, 255, 180)
-
-# --- Stats Panel Setup ---
-STATS_PANEL_WIDTH = 320
-stats_panel = pygame.Rect(CELL_SIZE * GRID_W + 80, 0, STATS_PANEL_WIDTH, HEIGHT)
 
 # --- Text Wrapping Function ---
 def wrap_text(text, font, max_width):
@@ -95,11 +98,72 @@ def wrap_text(text, font, max_width):
         lines.append(current)
     return lines
 
+# --- Enemy Movement and Spawning Helpers ---
+def move_non_boss_enemies(state):
+    grid_w, grid_h = GRID_W, GRID_H
+    new_rooms = copy.deepcopy(state.rooms)
+    for room_id, room in state.rooms.items():
+        for enemy in room['enemies'][:]:
+            if enemy['name'] == 'dungeon_boss':
+                continue  # Boss does not move
+            # Move enemy to random adjacent room
+            x, y = room['coords']
+            directions = [(-1,0),(1,0),(0,-1),(0,1)]
+            random.shuffle(directions)
+            moved = False
+            for dx, dy in directions:
+                nx, ny = x+dx, y+dy
+                if 0 <= nx < grid_w and 0 <= ny < grid_h:
+                    # Find the room at (nx, ny)
+                    for dest_id, dest_room in state.rooms.items():
+                        if dest_room['coords'] == (nx, ny):
+                            # Don't move into boss room
+                            if dest_room['type'] == 'boss_room':
+                                continue
+                            # Move enemy
+                            new_rooms[room_id]['enemies'].remove(enemy)
+                            new_rooms[dest_id]['enemies'].append(enemy)
+                            moved = True
+                            break
+                if moved:
+                    break
+    state.rooms = new_rooms
+    return state
+
+def count_non_boss_enemies(state):
+    count = 0
+    for room in state.rooms.values():
+        for enemy in room['enemies']:
+            if enemy['name'] != 'dungeon_boss':
+                count += 1
+    return count
+
+def spawn_enemy(state):
+    # Spawn a new non-boss enemy in a random room not occupied by player or boss
+    possible_rooms = [rid for rid, room in state.rooms.items()
+                     if room['type'] != 'boss_room' and rid != state.player.location]
+    if not possible_rooms:
+        return state
+    room_id = random.choice(possible_rooms)
+    name = random.choice([k for k in ENEMIES if k != 'dungeon_boss'])
+    enemy = {**ENEMIES[name], 'name': name}
+    new_rooms = copy.deepcopy(state.rooms)
+    new_rooms[room_id]['enemies'].append(enemy)
+    state.rooms = new_rooms
+    return state
+
+# --- Load Enemy Sprites ---
+slime_img = pygame.image.load('assets/basic enemies/slime.png').convert_alpha()
+slime_img = pygame.transform.smoothscale(slime_img, (48, 48))
+
 # --- Main Loop ---
 running = True
 waiting = False
 waiting_dots = 0
 pending_command = None  # Holds command to process after waiting indicator is shown
+flash_timer = 0  # ms, for enemy encounter flash
+flash_duration = 200  # ms
+battle_dialog = None  # Holds enemy names if a battle dialog should be shown
 while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -148,11 +212,15 @@ while running:
         pygame.draw.rect(screen, color, rect, border_radius=18)
         pygame.draw.rect(screen, ROOM_BORDER, rect, 3, border_radius=18)
         # Draw enemy marker if enemies present
-        if room["enemies"]:
+        for enemy in room["enemies"]:
             ex, ey = x*CELL_SIZE + CELL_SIZE//2, y*CELL_SIZE + CELL_SIZE//2
-            pygame.draw.circle(screen, (220, 60, 60), (ex, ey), 18)
-            e_txt = output_font.render("E", True, (255,255,255))
-            screen.blit(e_txt, (ex - e_txt.get_width()//2, ey - e_txt.get_height()//2))
+            if enemy['name'] == 'slime':
+                img_rect = slime_img.get_rect(center=(ex, ey))
+                screen.blit(slime_img, img_rect)
+            else:
+                pygame.draw.circle(screen, (220, 60, 60), (ex, ey), 18)
+                e_txt = output_font.render("E", True, (255,255,255))
+                screen.blit(e_txt, (ex - e_txt.get_width()//2, ey - e_txt.get_height()//2))
     # Draw player with glow
     px, py = state.rooms[state.player.location]["coords"]
     prect = pygame.Rect(px*CELL_SIZE+28, py*CELL_SIZE+28, CELL_SIZE-56, CELL_SIZE-56)
@@ -238,10 +306,7 @@ while running:
     # Draw Send button after stats panel so it's always visible
     send_btn_width, send_btn_height = 90, 44
     send_btn_rect = pygame.Rect(input_box.right - send_btn_width - 16, input_box.y + 10, send_btn_width, send_btn_height)
-    # If the send button would overlap the stats panel, move it left
-    if send_btn_rect.right > stats_panel.left - 8:
-        send_btn_rect.right = stats_panel.left - 8
-        send_btn_rect.x = send_btn_rect.right - send_btn_width
+    # No need to check overlap, input_box now ends before stats panel
     pygame.draw.rect(screen, (60, 120, 60), send_btn_rect, border_radius=10)
     pygame.draw.rect(screen, (120, 200, 120), send_btn_rect, 2, border_radius=10)
     send_txt = font.render("Send", True, (255,255,255))
@@ -262,6 +327,7 @@ while running:
 
     # Process pending command after waiting indicator is shown
     if waiting and pending_command:
+        prev_location = state.player.location
         try:
             import io
             import contextlib
@@ -269,17 +335,78 @@ while running:
             with contextlib.redirect_stdout(buf):
                 state = handle_command(pending_command, state, "gpt-4.1-mini", None)
             narrative = buf.getvalue().strip()
+            # Clear output area before showing new response
+            output_lines = []
             output_lines.append(f"> {pending_command}")
             if narrative:
                 for para in narrative.split('\n'):
                     for line in wrap_text(para, output_font, output_area.width-32):
                         output_lines.append(line)
         except Exception as e:
-            output_lines.append(f"Error: {e}")
+            output_lines = [f"Error: {e}"]
         output_lines = output_lines[-output_history_limit:]
         output_scroll = 0
+        input_text = ""  # Clear input after response
+        # Move non-boss enemies
+        state = move_non_boss_enemies(state)
+        # Ensure there are always 2 non-boss enemies
+        while count_non_boss_enemies(state) < 2:
+            state = spawn_enemy(state)
+        # Flash if entered a room with enemies
+        new_room = state.rooms.get(state.player.location, {})
+        if state.player.location != prev_location and new_room.get("enemies"):
+            flash_timer = pygame.time.get_ticks() + flash_duration
+            # Prepare battle dialog
+            enemy_names = [e['name'].replace('_', ' ').title() for e in new_room.get('enemies',[])]
+            battle_dialog = enemy_names
         waiting = False
         pending_command = None
+
+    # Draw flash overlay if needed
+    if flash_timer and pygame.time.get_ticks() < flash_timer:
+        s = pygame.Surface((WIDTH, HEIGHT))
+        s.set_alpha(200)
+        s.fill((255,255,255))
+        screen.blit(s, (0,0))
+        pygame.display.flip()
+    elif flash_timer and pygame.time.get_ticks() >= flash_timer:
+        flash_timer = 0
+
+    # Draw battle dialog if needed
+    if battle_dialog:
+        dialog_w, dialog_h = 600, 180
+        dialog_x = (WIDTH - dialog_w) // 2
+        dialog_y = (HEIGHT - dialog_h) // 2
+        dialog_rect = pygame.Rect(dialog_x, dialog_y, dialog_w, dialog_h)
+        pygame.draw.rect(screen, (30,30,60), dialog_rect, border_radius=18)
+        pygame.draw.rect(screen, (200,200,255), dialog_rect, 4, border_radius=18)
+        msg = f"A wild {', '.join(battle_dialog)} appears!"
+        msg_lines = wrap_text(msg, font, dialog_w-40)
+        for i, line in enumerate(msg_lines):
+            txt = font.render(line, True, (255,255,255))
+            screen.blit(txt, (dialog_x+24, dialog_y+32 + i*38))
+        # Draw Continue button
+        btn_w, btn_h = 180, 48
+        btn_rect = pygame.Rect(dialog_x + dialog_w//2 - btn_w//2, dialog_y + dialog_h - btn_h - 16, btn_w, btn_h)
+        pygame.draw.rect(screen, (60,120,60), btn_rect, border_radius=12)
+        pygame.draw.rect(screen, (120,200,120), btn_rect, 2, border_radius=12)
+        btn_txt = font.render("Continue", True, (255,255,255))
+        screen.blit(btn_txt, (btn_rect.centerx - btn_txt.get_width()//2, btn_rect.centery - btn_txt.get_height()//2))
+        pygame.display.flip()
+        # Wait for click or Enter
+        waiting_for_continue = True
+        while waiting_for_continue:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                elif event.type == pygame.KEYDOWN and (event.key == pygame.K_RETURN or event.key == pygame.K_SPACE):
+                    waiting_for_continue = False
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    mx, my = pygame.mouse.get_pos()
+                    if btn_rect.collidepoint(mx, my):
+                        waiting_for_continue = False
+        battle_dialog = None
 
 pygame.quit()
 sys.exit()
