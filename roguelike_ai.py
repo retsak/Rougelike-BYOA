@@ -173,7 +173,13 @@ RULES = {
     },
 
     # The front-end/game engine is the single source of truth
-    "engine_authority": "Always trust state_delta"
+    "engine_authority": "Always trust state_delta",
+
+    # Dice rolls for actions
+    "dice_rolls": {
+        "attack": "d20",
+        "skill_check": "d20"
+    }
 }
 
 SYSTEM_PROMPT = (
@@ -199,13 +205,14 @@ SYSTEM_PROMPT = (
     "Stay consistent, keep tension high, and remember: an un-dealt-with enemy is a stabbing you owe the player."
 )
 
-def call_openai(state: GameState, cmd: str, model: str) -> dict:
+def call_openai(state: GameState, cmd: str, model: str, roll_result: int = None) -> dict:
     # Pass history as context for memory
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": json.dumps({
             "state": asdict(state),
             "command": cmd,
+            "roll_result": roll_result,  # Include roll result
             "history": state.history[-10:]  # Last 10 events for context
         })}
     ]

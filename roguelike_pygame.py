@@ -5,6 +5,13 @@ import random
 import copy
 import os
 
+# Ensure OpenAI API key is set
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    print("OpenAI API key not found in environment variables.")
+    OPENAI_API_KEY = input("Please enter your OpenAI API key: ")
+    os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
+
 # --- Pygame Setup ---
 pygame.init()
 CELL_SIZE = 120  # Even larger
@@ -34,6 +41,8 @@ def load_enemy_sprites():
                 img = pygame.image.load(os.path.join(boss_path, fname)).convert_alpha()
                 img = pygame.transform.smoothscale(img, (64, 64))
                 sprite_dict[fname[:-4]] = img
+                # Debugging: Print loaded boss sprites
+                print("Loaded boss sprites:", [fname[:-4] for fname in os.listdir(boss_path) if fname.lower().endswith('.png')])
     return sprite_dict
 
 enemy_sprites = load_enemy_sprites()
@@ -70,10 +79,12 @@ def generate_grid_dungeon(seed: int, grid_w: int = 6, grid_h: int = 6) -> dict:
     boss_room = f"room_{grid_w*grid_h-1}"
     rooms[boss_room]["type"] = "boss_room"
     boss_enemy = {**ENEMIES["dungeon_boss"], "name": "dungeon_boss"}
-    boss_sprite_keys = [k for k in enemy_sprites if "boss" in k or "dungeon_boss" in k]
+    # Ensure boss sprite assignment
+    boss_sprite_keys = [k for k in enemy_sprites if "boss" in k.lower() or "dungeon_boss" in k.lower()]
     if boss_sprite_keys:
         boss_enemy['sprite'] = random.choice(boss_sprite_keys)
     else:
+        print("Warning: No boss sprites found in assets/bosses.")
         boss_enemy['sprite'] = None
     rooms[boss_room]["enemies"] = [boss_enemy]
     return rooms
@@ -120,7 +131,7 @@ max_output_lines = 12  # Number of lines visible at once
 output_history_limit = 200  # Total lines to keep for scrolling
 output_scroll = 0  # Scroll offset
 output_area_width = stats_panel.left - 8  # Match input box width
-output_area_height = int(320 * 0.9)
+output_area_height = int(320)  # Restore full height for the output area
 output_area = pygame.Rect(0, HEIGHT-STATUS_BAR_HEIGHT-64-output_area_height, output_area_width, output_area_height)  # Make output area 10% shorter
 output_color = (20, 20, 20)
 output_text_color = (255, 255, 180)
@@ -188,7 +199,7 @@ def move_non_boss_enemies(state):
                 if 0 <= nx < grid_w and 0 <= ny < grid_h:
                     # Find the room at (nx, ny)
                     for dest_id, dest_room in state.rooms.items():
-                        if dest_room['coords'] == (nx, ny):
+                        if 'coords' in dest_room and dest_room['coords'] == (nx, ny):
                             # Don't move into boss room
                             if dest_room['type'] == 'boss_room':
                                 continue
@@ -267,6 +278,28 @@ def select_hero():
                         selecting = False
     return selected_key
 
+# --- D20 Roll Function ---
+def roll_d20():
+    return random.randint(1, 20)
+
+# --- D20 Roll Animation ---
+def animate_d20_roll(screen, font, roll_result):
+    roll_rect = pygame.Rect(WIDTH // 2 - 50, HEIGHT // 2 - 50, 100, 100)
+    pygame.draw.rect(screen, (30, 30, 60), roll_rect, border_radius=12)
+    pygame.draw.rect(screen, (200, 200, 255), roll_rect, 4, border_radius=12)
+    roll_text = font.render(f"D20: {roll_result}", True, (255, 255, 255))
+    screen.blit(roll_text, (roll_rect.centerx - roll_text.get_width() // 2, roll_rect.centery - roll_text.get_height() // 2))
+    pygame.display.flip()
+    pygame.time.delay(1000)
+
+# --- Integrate D20 Roll into Attack Logic ---
+def attack_enemy(state, enemy):
+    roll_result = roll_d20()
+    animate_d20_roll(screen, font, roll_result)
+    damage = roll_result + state.player.str  # Example: Add player's strength to roll
+    enemy["hp"] -= damage
+    return f"You rolled a {roll_result} and dealt {damage} damage to {enemy['name']}!"
+
 # --- Main Loop ---
 running = True
 waiting = False
@@ -291,19 +324,28 @@ while running:
             elif event.key == pygame.K_BACKSPACE:
                 input_text = input_text[:-1]
             elif event.key == pygame.K_PAGEUP:
-                output_scroll = min(output_scroll + 1, max(0, len(output_lines) - max_output_lines))
+                if len(output_lines) > max_output_lines:
+                    output_scroll = min(output_scroll + 1, len(output_lines) - max_output_lines)
             elif event.key == pygame.K_PAGEDOWN:
-                output_scroll = max(output_scroll - 1, 0)
+                if len(output_lines) > max_output_lines:
+                    output_scroll = max(output_scroll - 1, 0)
             else:
                 if len(event.unicode) == 1 and 32 <= ord(event.unicode) < 127:
                     input_text += event.unicode
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 4:  # Scroll up
-                output_scroll = min(output_scroll + 1, max(0, len(output_lines) - max_output_lines))
+                if len(output_lines) > max_output_lines:
+                    output_scroll = min(output_scroll + 1, len(output_lines) - max_output_lines)
             elif event.button == 5:  # Scroll down
-                output_scroll = max(output_scroll - 1, 0)
+                if len(output_lines) > max_output_lines:
+                    output_scroll = max(output_scroll - 1, 0)
 
-    screen.fill(BLACK)
+    # Ensure the background fills the screen
+    if selected_bg:
+        screen.blit(selected_bg, (0, 0))
+    else:
+        screen.fill(BLACK)  # Fallback to black if no background is selected
+
     # --- Draw dungeon grid and connections ---
     # Draw connections between rooms
     for room in state.rooms.values():
