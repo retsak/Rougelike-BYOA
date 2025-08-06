@@ -91,6 +91,8 @@ def wrap_text(text, font, max_width):
 
 # --- Main Loop ---
 running = True
+waiting = False
+waiting_dots = 0
 while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -98,24 +100,25 @@ while running:
         elif event.type == pygame.KEYDOWN and input_active:
             if event.key == pygame.K_RETURN:
                 if input_text.strip():
+                    waiting = True
+                    waiting_dots = 0
                     # Process command using handle_command
                     try:
-                        # Patch: capture printed output from handle_command
                         import io
                         import contextlib
                         buf = io.StringIO()
                         with contextlib.redirect_stdout(buf):
                             state = handle_command(input_text.strip(), state, "gpt-4.1-mini", None)
                         narrative = buf.getvalue().strip()
-                        output_lines = [f"> {input_text.strip()}"]  # Clear previous text after each command
+                        output_lines = [f"> {input_text.strip()}"]
                         if narrative:
                             for para in narrative.split('\n'):
                                 for line in wrap_text(para, output_font, output_area.width-32):
                                     output_lines.append(line)
                     except Exception as e:
                         output_lines = [f"Error: {e}"]
-                    # Keep only last N lines
                     output_lines = output_lines[-max_output_lines:]
+                    waiting = False
                 input_text = ""
             elif event.key == pygame.K_BACKSPACE:
                 input_text = input_text[:-1]
@@ -161,6 +164,11 @@ while running:
     for i, line in enumerate(output_lines[-max_output_lines:]):
         txt = output_font.render(line, True, output_text_color)
         screen.blit(txt, (output_area.x+16, output_area.y+12 + i*24))
+    # Draw waiting indicator if needed
+    if waiting:
+        dots = '.' * ((pygame.time.get_ticks() // 400) % 4)
+        wait_txt = output_font.render(f"Waiting for Dungeon Master{dots}", True, (180, 180, 255))
+        screen.blit(wait_txt, (output_area.x+16, output_area.y+12 + (max_output_lines-1)*24))
     # Draw input box with border
     pygame.draw.rect(screen, input_color, input_box, border_radius=12)
     pygame.draw.rect(screen, ROOM_BORDER, input_box, 2, border_radius=12)

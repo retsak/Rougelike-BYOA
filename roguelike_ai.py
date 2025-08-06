@@ -79,6 +79,7 @@ class GameState:
     rooms: Dict[str, dict]
     player: Player
     turn: int = 0
+    history: list = field(default_factory=list)  # Memory of actions/events
 
     def to_json(self):
         return json.dumps(asdict(self), indent=2)
@@ -86,7 +87,7 @@ class GameState:
     @staticmethod
     def from_json(txt: str) -> "GameState":
         d = json.loads(txt)
-        return GameState(seed=d["seed"], rooms=d["rooms"], player=Player(**d["player"]), turn=d["turn"])
+        return GameState(seed=d["seed"], rooms=d["rooms"], player=Player(**d["player"]), turn=d["turn"], history=d.get("history", []))
 
 ########################################################################
 # 4. Dungeon Generation                                               #
@@ -124,18 +125,28 @@ def generate_dungeon(seed: int, n_rooms: int = 12) -> Dict[str, dict]:
 ########################################################################
 RULES = {"core_stats": ["hp", "str", "dex", "level", "xp"], "dice": "d20", "actions": ["move", "look", "attack", "loot", "inventory", "use"], "engine_authority": "Always trust state_delta"}
 SYSTEM_PROMPT = (
-    "You are DungeonGPT, an impartial text dungeon master. "
-    "Return JSON with 'narrative' and 'state_delta'. Use vivid second‑person. "
+    "You are DungeonGPT, a classic Dungeons & Dragons Dungeon Master. "
+    "Narrate the world, describe what the player sees, hears, and feels. "
+    "Offer vivid choices, suggest actions, and roleplay NPCs. "
+    "Always give the player clear directions and options. "
+    "Keep track of the story so far. "
+    "Return JSON with 'narrative' and 'state_delta'. Use vivid second-person. "
     "Never reveal dice rolls or hidden data. Rules: " + json.dumps(RULES)
 )
 
 def call_openai(state: GameState, cmd: str, model: str) -> dict:
+    # Pass history as context for memory
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": json.dumps({
+            "state": asdict(state),
+            "command": cmd,
+            "history": state.history[-10:]  # Last 10 events for context
+        })}
+    ]
     resp = openai.chat.completions.create(
         model=model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps({"state": asdict(state), "command": cmd})}
-        ],
+        messages=messages,
         temperature=0.7,
     )
     content = resp.choices[0].message.content
@@ -233,6 +244,9 @@ def handle_command(cmd: str, state: GameState, model: str, save_file=None) -> Ga
         return state
     openai_resp = call_openai(state, cmd, model)
     narrative, state_delta = openai_resp["narrative"], openai_resp["state_delta"]
+    # --- Memory: append to history ---
+    state.history.append({"turn": state.turn, "command": cmd, "narrative": narrative})
+    # --- Apply state changes ---
     for k, v in state_delta.items():
         current = getattr(state, k)
         if isinstance(current, dict) and isinstance(v, dict):
@@ -240,10 +254,12 @@ def handle_command(cmd: str, state: GameState, model: str, save_file=None) -> Ga
         else:
             setattr(state, k, v)
     if isinstance(state.player, dict):
-        old_location = getattr(state, 'player', None)
-        old_location = old_location.location if hasattr(old_location, 'location') else None
-        if 'location' not in state.player and old_location:
-            state.player['location'] = old_location
+        # Always preserve the current location if not present in the new player dict
+        current_location = getattr(state, 'player', None)
+        current_location = current_location.location if hasattr(current_location, 'location') else None
+        if 'location' not in state.player or not state.player['location']:
+            if current_location:
+                state.player['location'] = current_location
         state.player = Player(**state.player)
     print(narrative)
     return state
