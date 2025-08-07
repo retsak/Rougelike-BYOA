@@ -41,9 +41,9 @@ A text-based roguelike adventure powered by OpenAI. Explore a procedurally gener
    ```sh
    pip install pygame
    ```
-2. **Run the graphical client:**
+2. **Run the graphical client from the repository root:**
    ```sh
-   python -m ui.main
+   python play.py
    ```
    - All gameplay and UI are now handled in the graphical client. The core logic is in `roguelike_ai.py` (as a library only).
    - The graphical version features a large, modern grid map, clickable input box, and a scrollable output area. Movement and room connections now match the visual grid exactly.
