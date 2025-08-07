@@ -398,7 +398,7 @@ def run():
                 import contextlib
                 buf = io.StringIO()
                 with contextlib.redirect_stdout(buf):
-                    result = handle_command(pending_command, state, "gpt-4.1-mini", roll_result_to_send, None)
+                    result = handle_command(pending_command, state, "gpt-5-mini", roll_result_to_send, None)
                 narrative = ""
                 options = []
                 force_option_select = False
@@ -513,7 +513,7 @@ def run():
                 import contextlib
                 buf = io.StringIO()
                 with contextlib.redirect_stdout(buf):
-                    result = handle_command(pending_command, state, "gpt-4.1-mini", roll_result_to_send, None)
+                    result = handle_command(pending_command, state, "gpt-5-mini", roll_result_to_send, None)
                 narrative = ""
                 options = []
                 force_option_select = False
