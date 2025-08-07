@@ -11,7 +11,7 @@ import json
 import os
 from dataclasses import asdict
 
-import openai
+from openai import OpenAI
 
 from core.models import Player, GameState
 from core.dungeon import generate_dungeon, deep_update
@@ -88,15 +88,22 @@ SYSTEM_PROMPT = (
 # Add a counter to track API calls
 api_call_counter = 1
 
+# Initialize OpenAI client lazily
+client: OpenAI | None = None
+
 # Update the call_openai function to increment the counter
 def call_openai(state: GameState, cmd: str, model: str, roll_result: int = None) -> dict:
     global api_call_counter
     api_call_counter += 1  # Increment the counter
 
     # Ensure OpenAI API key is set
-    openai.api_key = os.getenv("OPENAI_API_KEY")
-    if not openai.api_key:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
         raise ValueError("OpenAI API key is not set. Please check your environment variables.")
+
+    global client
+    if client is None:
+        client = OpenAI(api_key=api_key)
 
     # Pass history as context for memory
     messages = [
@@ -108,12 +115,18 @@ def call_openai(state: GameState, cmd: str, model: str, roll_result: int = None)
             "history": state.history[-10:]  # Last 10 events for context
         })}
     ]
-    resp = openai.chat.completions.create(
+    resp = client.responses.create(
         model=model,
-        messages=messages,
+        input=messages,
         temperature=0.7,
+        reasoning={"effort": "minimal"},
     )
-    content = resp.choices[0].message.content
+    content = ""
+    for item in resp.output:
+        if item.type == "message":
+            for c in item.content:
+                if c.type == "output_text":
+                    content += c.text
     try:
         return json.loads(content)
     except json.JSONDecodeError:
