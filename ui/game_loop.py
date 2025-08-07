@@ -14,7 +14,7 @@ def run():
         attack_enemy,
     )
 
-    from core.dungeon import generate_grid_dungeon
+    from core.grid import generate_grid_dungeon
     from core.models import Player, GameState
     from ai import handle_command, get_api_call_counter
     from ui.dialogs import select_hero, game_over_dialog, HERO_STATS
