@@ -1146,9 +1146,39 @@ def run():
             if not pending_command.startswith('/') and roll_result_to_send is None and next_roll_result is not None:
                 roll_result_to_send = next_roll_result
                 next_roll_result = None
-            # Determine if this is a movement-like command to allow enemy movement/spawn
+            # Determine if this is a movement-like command (supports optional [BRIEF] prefix)
             cmd_lower_for_spawn = pending_command.lower()
-            is_movement_cmd = any(cmd_lower_for_spawn.startswith(t) for t in ["move","go","walk","run","flee"]) or cmd_lower_for_spawn.startswith("[brief] move")
+            movement_prefixes = ["move","go","walk","run","flee"]
+            is_movement_cmd = False
+            for mp in movement_prefixes:
+                if cmd_lower_for_spawn.startswith(mp) or cmd_lower_for_spawn.startswith(f"[brief] {mp}"):
+                    is_movement_cmd = True
+                    break
+            # --- Engine-side movement resolution (UI level) ---
+            # This duplicates logic in ai.handle_command to ensure immediate visual update even if AI movement logic changes.
+            if is_movement_cmd:
+                # Strip [BRIEF] tag, split tokens
+                logic_cmd = pending_command.replace('[BRIEF]','').replace('[brief]','').strip()
+                parts = logic_cmd.split()
+                if parts and parts[0] in movement_prefixes and len(parts) >= 2:
+                    direction = parts[1]
+                    deltas = {"north": (0,-1), "south": (0,1), "east": (1,0), "west": (-1,0)}
+                    if direction in deltas:
+                        try:
+                            cx, cy = state.rooms[state.player.location]["coords"]
+                            dx, dy = deltas[direction]
+                            target = (cx + dx, cy + dy)
+                            coord_map = {tuple(r["coords"]): rid for rid, r in state.rooms.items()}
+                            target_id = coord_map.get(target)
+                            if target_id:
+                                tgt_room = state.rooms[target_id]
+                                if not tgt_room.get("locked"):
+                                    prev_location = state.player.location
+                                    state.player.location = target_id
+                                    state.rooms[target_id]["visited"] = True
+                                    # Update output echo to reflect movement if needed
+                        except Exception:
+                            pass
             if battle_options:
                 cmd_lower = pending_command.lower()
                 selected_option = None
