@@ -228,9 +228,22 @@ def call_openai(state: GameState, cmd: str, model: str, roll_result: int | None 
                     json_block = False
                 continue
             # Remove dot-notation debug state lines like player.location: xxx or rooms.room_2.visited: true
-            if ':' in ln and (low.startswith('player.') or low.startswith('rooms.')):
-                # treat as debug and drop
-                continue
+            if ':' in ln:
+                # Direct dot-notation at start
+                if low.startswith('player.') or low.startswith('rooms.'):
+                    continue
+                # Bullet style: '- player.location: ...' or '- rooms.room_2.visited: true'
+                stripped = ln.lstrip()
+                if stripped.startswith('-'):
+                    bullet_body = stripped[1:].lstrip()
+                    body_low = bullet_body.lower()
+                    if body_low.startswith('player.') or body_low.startswith('rooms.'):
+                        continue
+                # After room id substitution we may get spaces inside like 'rooms.the chamber.visited:'
+                if 'player.location:' in low:
+                    continue
+                if 'rooms.' in low and '.visited' in low:
+                    continue
             cleaned.append(ln)
         # Trim leading/trailing empty lines
         while cleaned and not cleaned[0].strip():
@@ -542,28 +555,25 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
     # --- Engine-side movement resolution (pre-model) ---
     lower_logic_cmd = logic_cmd.lower()
     tokens = lower_logic_cmd.split()
+    engine_prev_location = state.player.location
+    engine_moved = False
     if tokens and tokens[0] in {"move","go","walk","run"}:
         if len(tokens) >= 2:
             direction = tokens[1]
             deltas = {"north": (0,-1), "south": (0,1), "east": (1,0), "west": (-1,0)}
             if direction in deltas:
                 dx, dy = deltas[direction]
-                # locate current coords
                 try:
                     cx, cy = state.rooms[state.player.location]["coords"]
                     target = (cx + dx, cy + dy)
-                    # build coord->id map
                     coord_map = {tuple(r["coords"]): rid for rid, r in state.rooms.items()}
                     target_id = coord_map.get(target)
                     if target_id:
-                        # Check locked
                         tgt_room = state.rooms[target_id]
-                        if tgt_room.get("locked"):
-                            # movement blocked; we keep location same
-                            pass
-                        else:
+                        if not tgt_room.get("locked"):
                             state.player.location = target_id
                             state.rooms[target_id]["visited"] = True
+                            engine_moved = True
                 except Exception:
                     pass
     auto_roll_summary = None
@@ -589,6 +599,12 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
             pending_advantage = None  # consume
         roll_result = chosen
         auto_roll_summary = f"[auto-roll] {detail}"
+    # If command is a plain attack (e.g. "attack" or "attack slime") and no roll provided, generate one automatically
+    base_first = logic_cmd.split()[0] if logic_cmd.split() else ''
+    if base_first == 'attack' and roll_result is None:
+        r1 = random.randint(1,20)
+        roll_result = r1
+        auto_roll_summary = f"[auto-roll] d20 => {r1} (attack)"
     openai_resp = call_openai(state, model_cmd, model, roll_result, hint_mode=hint_mode)
     narrative, state_delta = openai_resp["narrative"], openai_resp["state_delta"]
     # --- Memory: append to history ---
@@ -634,7 +650,7 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
             state.player = Player(**dict(state.player))
         except Exception:
             pass
-    # --- Sanitize player location if model produced an invalid room id ---
+    # --- Sanitize player location if model produced an invalid room id or tried to override when engine didn't move ---
     def _sanitize_location() -> None:
         loc = state.player.location
         if loc in state.rooms:
@@ -680,6 +696,9 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
                 # arbitrary first key
                 state.player.location = next(iter(state.rooms))
     _sanitize_location()
+    if not engine_moved and state.player.location != engine_prev_location:
+        # Revert unauthorized model move
+        state.player.location = engine_prev_location
     # --- Enemy reaction logic ---
     room = state.rooms[state.player.location]
     living_enemies = [e for e in room["enemies"] if e.get("hp", 0) > 0]
@@ -719,6 +738,22 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
         counter['n'] += 1
         return 'the chamber' if counter['n']==1 else 'the next chamber'
     narrative = re.sub(r"room_\d+", _room_sub, narrative)
+    # Remove stray boilerplate like standalone 'State updated.' or quoted duplicate blocks
+    cleaned_lines = []
+    seen_block = None
+    for ln in narrative.split('\n'):
+        t = ln.strip()
+        if t.lower() == 'state updated.' or t.lower().startswith('state unchanged'):
+            continue
+        # Drop a full block repeated inside quotes
+        if t.startswith('"') and t.endswith('"') and len(t) > 10:
+            inner = t.strip('"')
+            if inner == seen_block:
+                continue
+        cleaned_lines.append(ln)
+        if not seen_block:
+            seen_block = ln.strip().strip('"')
+    narrative = '\n'.join(cleaned_lines).strip()
     dm_say(narrative)
     # Return the full OpenAI response dict, plus any modifications
     openai_resp["narrative"] = narrative

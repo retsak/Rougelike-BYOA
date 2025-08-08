@@ -1209,7 +1209,7 @@ def run():
                 import contextlib
                 buf = io.StringIO()
                 with contextlib.redirect_stdout(buf):
-                    result = handle_command(pending_command, state, "gpt-5-mini", roll_result_to_send, None)
+                    result = handle_command(pending_command, state, "gpt-5-mini", roll_result_to_send, None) or {}
                 narrative = ""
                 options = []
                 force_option_select = False
@@ -1218,7 +1218,7 @@ def run():
                     narrative = result.get('narrative', '')
                     options = result.get('options', [])
                     force_option_select = result.get('force_option_select', False)
-                    state_delta = result.get('state_delta', None)
+                    state_delta = result.get('state_delta') if 'state_delta' in result else None
                     auto_roll_summary = result.get('auto_roll_summary')
                     if not options:
                         for line in narrative.split('\n'):
@@ -1230,7 +1230,7 @@ def run():
                         narrative = parsed.get('narrative', '')
                         options = parsed.get('options', [])
                         force_option_select = parsed.get('force_option_select', False)
-                        state_delta = parsed.get('state_delta', None)
+                        state_delta = parsed.get('state_delta') if isinstance(parsed, dict) else None
                         auto_roll_summary = parsed.get('auto_roll_summary')
                         if not options:
                             for line in narrative.split('\n'):
