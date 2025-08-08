@@ -1022,8 +1022,14 @@ def run():
             while pygame.mouse.get_pressed()[0]:
                 pygame.event.pump()
 
-        # Process pending command after waiting indicator is shown
-        if waiting and pending_command:
+        # Process any pending command (no need for separate waiting flag gating)
+        if pending_command:
+            # Detect if user was at bottom before adding new lines
+            was_at_bottom = True  # simple approach; ensures auto-scroll unless user scrolled earlier
+            try:
+                print(f"[debug] processing command: {pending_command}")
+            except Exception:
+                pass
             prev_location = state.player.location
             roll_result_to_send = None
             output_lines = [f"> {pending_command}"]
@@ -1169,134 +1175,6 @@ def run():
                     running = False
                     # mark for exit after frame
 
-        # After setting pending_command, immediately process the command
-        if pending_command:
-            prev_location = state.player.location
-            roll_result_to_send = None
-            output_lines = [f"> {pending_command}"]
-            cmd_lower_for_spawn = pending_command.lower()
-            is_movement_cmd = any(cmd_lower_for_spawn.startswith(t) for t in ["move","go","walk","run","flee"]) or cmd_lower_for_spawn.startswith("[brief] move")
-            if battle_options:
-                cmd_lower = pending_command.lower()
-                selected_option = None
-                if cmd_lower.isdigit():
-                    idx = int(cmd_lower) - 1
-                    if 0 <= idx < len(battle_options):
-                        selected_option = battle_options[idx]
-                else:
-                    for opt in battle_options:
-                        if cmd_lower in opt.lower():
-                            selected_option = opt
-                            break
-                if selected_option and "attack" in selected_option.lower():
-                    room = state.rooms.get(state.player.location, {})
-                    target_enemy = next((e for e in room.get('enemies', []) if e.get('hp', 0) > 0), None)
-                    if target_enemy:
-                        atk_msg, roll_result_to_send = attack_enemy(state, target_enemy, screen, font)
-                        combat_log.append(atk_msg)
-                        for line in wrap_text(atk_msg, output_font, output_area.width-32):
-                            output_lines.append(line)
-                        if target_enemy["hp"] <= 0:
-                            room["enemies"].remove(target_enemy)
-                            state.player.give_xp(target_enemy.get("xp", 0))
-                            defeat_msg = f"The {target_enemy['name'].replace('_', ' ')} is defeated!"
-                            output_lines.append(defeat_msg)
-                            combat_log.append(defeat_msg)
-                    pending_command = "attack"
-            try:
-                import io
-                import contextlib
-                buf = io.StringIO()
-                with contextlib.redirect_stdout(buf):
-                    result = handle_command(pending_command, state, "gpt-5-mini", roll_result_to_send, None)
-                narrative = ""
-                options = []
-                force_option_select = False
-                state_delta = None
-                if isinstance(result, dict):
-                    narrative = result.get('narrative', '')
-                    options = result.get('options', [])
-                    force_option_select = result.get('force_option_select', False)
-                    state_delta = result.get('state_delta', None)
-                    if not options:
-                        for line in narrative.split('\n'):
-                            if line.strip().startswith(tuple(str(i)+'.' for i in range(1,10))):
-                                options.append(line.strip())
-                elif isinstance(result, str):
-                    try:
-                        parsed = json.loads(result)
-                        narrative = parsed.get('narrative', '')
-                        options = parsed.get('options', [])
-                        force_option_select = parsed.get('force_option_select', False)
-                        state_delta = parsed.get('state_delta', None)
-                        if not options:
-                            for line in narrative.split('\n'):
-                                if line.strip().startswith(tuple(str(i)+'.' for i in range(1,10))):
-                                    options.append(line.strip())
-                    except Exception:
-                        narrative = result
-                else:
-                    narrative = "(No narrative returned)"
-                if state_delta and isinstance(state_delta, dict):
-                    if 'player' in state_delta and isinstance(state_delta['player'], dict):
-                        for k, v in state_delta['player'].items():
-                            setattr(state.player, k, v)
-                if narrative:
-                    for para in narrative.split('\n'):
-                        for line in wrap_text(para, output_font, output_area.width-32):
-                            output_lines.append(line)
-                if pending_command.lower().startswith('/hint') and options:
-                    battle_options = options
-                    battle_force_select = force_option_select
-                else:
-                    battle_options = None
-                    battle_force_select = False
-            except Exception as e:
-                output_lines.append(f"Error: {e}")
-                battle_options = None
-                battle_force_select = False
-            output_lines = output_lines[-output_history_limit:]
-            for ln in output_lines:
-                scene_log.append(ln)
-            if len(scene_log) > 5000:
-                scene_log = scene_log[-5000:]
-            if was_at_bottom:
-                output_scroll = 10**9
-            input_text = ""
-            if not battle_options and is_movement_cmd:
-                state = move_non_boss_enemies(state, GRID_W, GRID_H)
-                while count_non_boss_enemies(state) < 2:
-                    state = spawn_enemy(state, enemy_sprites)
-            new_room = state.rooms.get(state.player.location, {})
-            if state.player.location != prev_location and new_room.get("enemies"):
-                flash_timer = pygame.time.get_ticks() + flash_duration
-                enemy_names = [e['name'].replace('_', ' ').title() for e in new_room.get('enemies',[])]
-                battle_dialog = enemy_names
-            else:
-                battle_dialog = None
-                battle_options = None
-                battle_force_select = False
-            waiting = False
-            pending_command = None
-            # --- Game Over Check ---
-            if state.player.hp <= 0:
-                action = game_over_dialog(screen, font, output_font, WIDTH, HEIGHT)
-                if action == "play_again":
-                    seed = random.randint(1, 999999)
-                    rooms = generate_grid_dungeon(seed, GRID_W, GRID_H)
-                    for room in rooms.values():
-                        for enemy in room["enemies"]:
-                            sprite_keys = [k for k in enemy_sprites if enemy["name"] in k]
-                            enemy["sprite"] = random.choice(sprite_keys) if sprite_keys else None
-                    player = Player(location="room_0")
-                    state = GameState(seed=seed, rooms=rooms, player=player)
-                    if isinstance(state.player, dict):
-                        state.player = Player(**state.player)
-                    selected_hero = select_hero(screen, hero_sprites, font, output_font, WIDTH, HEIGHT)
-                    player_icon = hero_sprites[selected_hero]
-                else:
-                    running = False
-                    # will exit outer loop
 
     pygame.quit()
     sys.exit()

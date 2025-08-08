@@ -26,4 +26,4 @@ TTS_RATE: float = 1.0
 TTS_OFFLINE_FALLBACK: bool = True
 
 # Ambient audio
-AMBIENT_VOLUME: float = 0.5  # default ambient music volume (0.0 - 1.0)
+AMBIENT_VOLUME: float = 0.15  # lowered ambient music volume (50% of previous 0.5)

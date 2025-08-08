@@ -54,29 +54,15 @@ RULES = {
 
 SYSTEM_PROMPT = (
     "You are **DungeonGPT**, a seasoned Dungeons & Dragons Dungeon Master. "
-    "You actively direct the player, offering clear choices, warnings, and suggestions for what to do next. "
-    "Describe the world in vivid second-person prose—what the player sees, hears, and feels. "
-    "Role-play NPCs and monsters, and always keep the pacing brisk. "
-    "If the player is in danger, warn them and suggest defensive or clever actions. "
-    "If the player ignores or moves away from a hostile creature, narrate the enemy's reaction and the consequences (damage, attacks, etc.). "
-    "Always offer at least two possible actions or directions after each turn. "
-    "If the player is in a battle (i.e., shares a room with a living enemy), you MUST provide at least two numbered actionable options (e.g., '1. Attack', '2. Flee', '3. Use Item') for the player to select from, and you MUST include a boolean field 'force_option_select': true in your JSON output. "
-    "If the player must select an option, always present the options as a numbered list at the end of your narrative, and set 'force_option_select': true in your JSON output. "
-    "If the player is not forced to select an option, do not include the 'force_option_select' field or set it to false. "
-
-    "### Strict Gameplay Rules\n"
-    "• Always apply the rules in the JSON `RULES` block above.\n"
-    "• After every player action, resolve enemy reactions automatically.  \n"
-    "    – If the player ignores or moves away from a hostile creature that is still alive, "
-    "      the creature immediately attacks (deal damage in `state_delta`).\n"
-    "• Never reveal hidden information or raw die rolls—only outcomes.\n"
-    "• Output **JSON** with two top-level keys:\n"
-    "    1. `narrative`: rich, immersive description for the player, including consequences and next steps.\n"
-    "    2. `state_delta`: exact stat/position/flag changes caused this turn.\n"
-    "If you are forcing the player to select an option, add a third key: 'force_option_select': true.\n"
-    "The client UI will merge `state_delta` into authoritative game state—treat it as truth.\n"
-
-    "Stay consistent, keep tension high, and remember: an un-dealt-with enemy is a stabbing you owe the player."
+    "Describe the world in vivid second-person prose (what the player sees, hears, feels) and keep pacing brisk. "
+    "Warn the player if in danger and narrate consequences of ignoring or leaving hostile creatures. "
+    "ONLY provide an 'options' list (numbered suggestions) when the player explicitly requests a hint via the /hint command. "
+    "Otherwise DO NOT include an 'options' list or numbered suggestions; just give immersive narrative and consequences. "
+    "In combat you also refrain from enumerating options unless /hint was used; the client UI supplies action buttons. "
+    "Never reveal hidden info or raw die rolls—only outcomes. "
+    "Output JSON with at least: 'narrative' and 'state_delta'. If (and only if) /hint was used AND you have concrete helpful next steps, include an 'options' array of concise actionable strings (max 5). "
+    "Do not include 'force_option_select' unless an unavoidable binary or multi-way mandatory choice blocks progress AND /hint was requested. "
+    "Keep narration concise when movement-only unless detail was requested."
 )
 
 # Add a counter to track API calls
@@ -86,7 +72,7 @@ api_call_counter = 1
 client: OpenAI | None = None
 
 
-def call_openai(state: GameState, cmd: str, model: str, roll_result: int | None = None) -> dict:
+def call_openai(state: GameState, cmd: str, model: str, roll_result: int | None = None, hint_mode: bool = False) -> dict:
     """Send state and command to OpenAI and return the parsed response."""
     global api_call_counter
     api_call_counter += 1  # Increment the counter
@@ -116,8 +102,9 @@ def call_openai(state: GameState, cmd: str, model: str, roll_result: int | None 
     }
     if brief:
         user_payload["style_hint"] = "Provide a concise 2-3 sentence scene description focused on immediate tactical context."
+    extra_directive = " (User did NOT request /hint; omit any options array and numbered suggestions.)" if not hint_mode else " (User requested /hint; you MAY add an 'options' array of concise numbered actionable suggestions.)"
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT + (" Always keep movement-only responses to 2-3 sentences unless player asks for detail." if brief else "")},
+        {"role": "system", "content": SYSTEM_PROMPT + (" Always keep movement-only responses to 2-3 sentences unless player asks for detail." if brief else "") + extra_directive},
         {"role": "user", "content": json.dumps(user_payload)},
     ]
     resp = client.responses.create(
@@ -132,9 +119,32 @@ def call_openai(state: GameState, cmd: str, model: str, roll_result: int | None 
                 if c.type == "output_text":
                     content += c.text
     try:
-        return json.loads(content)
+        data = json.loads(content)
     except json.JSONDecodeError:
-        return {"narrative": content, "state_delta": {}}
+        data = {"narrative": content, "state_delta": {}}
+    # Strip options if not in hint mode regardless of model output
+    if not hint_mode and isinstance(data, dict):
+        if 'options' in data:
+            del data['options']
+        # Remove any inline 'Options:' section from narrative
+        narr = data.get('narrative', '') or ''
+        if 'Options:' in narr:
+            lines = []
+            skipping = False
+            for ln in narr.split('\n'):
+                if ln.strip().lower().startswith('options:'):
+                    skipping = True
+                    continue
+                if skipping:
+                    # Stop skipping when line no longer looks like numbered option
+                    if not ln.strip().startswith(tuple(f"{i}." for i in range(1,10))):
+                        skipping = False
+                    else:
+                        continue
+                if not skipping:
+                    lines.append(ln)
+            data['narrative'] = '\n'.join(lines).strip()
+    return data
 
 
 def get_api_call_counter() -> int:
@@ -338,7 +348,10 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
         if handled:
             return {"narrative": meta_out, "state_delta": {}}
         return {"narrative": "[!] Unknown command.", "state_delta": {}}
-    openai_resp = call_openai(state, cmd, model, roll_result)
+    hint_mode = cmd.lower().startswith('/hint')
+    # Remove the /hint token from the command sent to the model for cleaner language understanding
+    model_cmd = cmd[5:].strip() if hint_mode else cmd
+    openai_resp = call_openai(state, model_cmd, model, roll_result, hint_mode=hint_mode)
     narrative, state_delta = openai_resp["narrative"], openai_resp["state_delta"]
     # --- Memory: append to history ---
     state.history.append({"turn": state.turn, "command": cmd, "narrative": narrative})
