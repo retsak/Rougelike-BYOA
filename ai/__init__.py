@@ -228,7 +228,8 @@ def call_openai(state: GameState, cmd: str, model: str, roll_result: int | None 
                     json_block = False
                 continue
             # Remove dot-notation debug state lines like player.location: xxx or rooms.room_2.visited: true
-            if ':' in ln:
+            # Arrow or colon style debug lines
+            if ':' in ln or '->' in ln:
                 # Direct dot-notation at start
                 if low.startswith('player.') or low.startswith('rooms.'):
                     continue
@@ -239,10 +240,16 @@ def call_openai(state: GameState, cmd: str, model: str, roll_result: int | None 
                     body_low = bullet_body.lower()
                     if body_low.startswith('player.') or body_low.startswith('rooms.'):
                         continue
+                    # Arrow variant '- player.location -> ...'
+                    if ('player.' in body_low or 'rooms.' in body_low) and '->' in body_low:
+                        continue
                 # After room id substitution we may get spaces inside like 'rooms.the chamber.visited:'
                 if 'player.location:' in low:
                     continue
                 if 'rooms.' in low and '.visited' in low:
+                    continue
+                # Arrow substitution variant e.g. rooms.the chamber.visited -> true
+                if 'rooms.' in low and '.visited' in low and '->' in low:
                     continue
             cleaned.append(ln)
         # Trim leading/trailing empty lines
@@ -607,6 +614,9 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
         auto_roll_summary = f"[auto-roll] d20 => {r1} (attack)"
     openai_resp = call_openai(state, model_cmd, model, roll_result, hint_mode=hint_mode)
     narrative, state_delta = openai_resp["narrative"], openai_resp["state_delta"]
+    # If movement was attempted but engine_moved is False, override misleading success narration
+    if tokens and tokens[0] in {"move","go","walk","run","got"} and not engine_moved:
+        narrative = f"You can't go {tokens[1] if len(tokens)>1 else ''} from here." if len(tokens)>1 else "You can't move that way." 
     # --- Memory: append to history ---
     state.history.append({"turn": state.turn, "command": cmd, "narrative": narrative})
     # --- Safe merge of model-proposed state_delta ---
@@ -702,15 +712,18 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
     # --- Enemy reaction logic ---
     room = state.rooms[state.player.location]
     living_enemies = [e for e in room["enemies"] if e.get("hp", 0) > 0]
-    if living_enemies and not any(x in cmd.lower() for x in ["attack", "flee"]):
+    # Treat movement attempts (even if blocked) as not "ignoring" enemies to reduce frustration
+    movement_verbs = {"move","go","walk","run","flee","got"}
+    first_token = (cmd.split() or [""])[0].lower()
+    is_movement_attempt = first_token in movement_verbs or cmd.lower().startswith('[brief] ') and (cmd.lower().split()[1] if len(cmd.split())>1 else '') in movement_verbs
+    if living_enemies and not is_movement_attempt and not any(x in cmd.lower() for x in ["attack", "flee"]):
         enemy = living_enemies[0]
-        dmg = max(1, enemy["str"])
+        dmg = max(1, enemy.get("str",1))
         state.player.hp -= dmg
         narrative += f"\nThe {enemy['name']} attacks you for {dmg} damage as you ignore it!"
-        if "hp" in state_delta:
-            state_delta["hp"] -= dmg
-        else:
-            state_delta["hp"] = state.player.hp
+        # Reflect new HP in state_delta
+        state_delta.setdefault('player', {})
+        state_delta['player']['hp'] = state.player.hp
     # Speak + print the narrative using the TTS engine.
     # Movement compression: detect sequences of brief movement commands
     lower_cmd = cmd.lower()
@@ -754,6 +767,22 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
         if not seen_block:
             seen_block = ln.strip().strip('"')
     narrative = '\n'.join(cleaned_lines).strip()
+    # Final pass: remove consecutive duplicate paragraphs/lines to combat occasional model repetition
+    def _dedup(text: str) -> str:
+        if not text:
+            return text
+        lines = text.split('\n')
+        out = []
+        prev = None
+        for ln in lines:
+            if prev is not None and ln.strip() and ln.strip() == prev.strip():
+                # skip exact duplicate consecutive narrative line
+                continue
+            out.append(ln)
+            if ln.strip():
+                prev = ln
+        return '\n'.join(out)
+    narrative = _dedup(narrative)
     dm_say(narrative)
     # Return the full OpenAI response dict, plus any modifications
     openai_resp["narrative"] = narrative
