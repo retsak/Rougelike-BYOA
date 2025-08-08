@@ -6,7 +6,7 @@ def run():
     import os
     import time  # Import time module for timeout logic
     import json
-    from tts_engine import dm_say
+    from tts_engine import dm_say, voice
     from ui.assets import (
         load_enemy_sprites,
         load_hero_sprites,
@@ -14,6 +14,7 @@ def run():
         pick_background_for_room,
         load_ambient_loops,
         pick_loop_for_room,
+    load_sfx,
     )
     from config import AMBIENT_VOLUME
     from ui.gameplay import (
@@ -94,7 +95,7 @@ def run():
     was_at_bottom = True  # track whether user was at bottom before adding new lines
 
     # --- Action Buttons (meta commands) ---
-    action_labels = ["/look", "/loot", "/inventory", "/stats", "/ability", "/map"]
+    action_labels = ["/look", "/loot", "/inventory", "/stats", "/ability", "/map", "/hint"]
     action_button_rects = []  # populated each frame
     show_inventory_panel = False
     inventory_grid_rects = []  # (item, rect)
@@ -119,6 +120,10 @@ def run():
         "mysterious dungeon filled with monsters, treasures, and untold dangers. "
         "Navigate carefully, fight wisely, and may fortune favor your journey!"
     ]
+    try:
+        print("\n".join(output_lines))
+    except Exception:
+        pass
     # New structured logs
     scene_log = list(output_lines)  # full narrative history
     active_log_tab = 'scene'  # 'scene' or 'combat'
@@ -195,6 +200,7 @@ def run():
     pygame.mixer.init()
     backgrounds = load_backgrounds(WIDTH, HEIGHT)
     ambient_loops = load_ambient_loops()
+    sfx = load_sfx()
     current_loop = None
     selected_bg = None
     parallax_offset = [0,0]
@@ -218,6 +224,23 @@ def run():
     player.dex = stats.get("dex", player.dex)
     player.ability = stats.get("ability")
     player_icon = hero_sprites[selected_hero]
+    # Assign and auto-equip a default basic weapon if not present
+    default_weapon_by_hero = {
+        'Fighter': 'iron sword',
+        'Knight': 'steel sword',
+        'Rogue': 'dagger',
+        'Cleric': 'mace',
+        'Dragon': 'fiery claws',
+        'Toad': 'sticky tongue'
+    }
+    base_weapon = default_weapon_by_hero.get(selected_hero, 'rusty sword')
+    if base_weapon not in player.inventory:
+        player.inventory.append(base_weapon)
+    if player.classify_item(base_weapon) == 'equipment':
+        try:
+            player.equip_item(base_weapon)
+        except Exception:
+            pass
     # Ensure battle_options is defined before use
     battle_options = None
     waiting_start_time = None  # Initialize waiting start time
@@ -237,6 +260,10 @@ def run():
                         if not input_history or (input_history and raw_cmd != input_history[-1]):
                             input_history.append(raw_cmd)
                         history_index = -1
+                        try:
+                            voice.stop_all()
+                        except Exception:
+                            pass
                         pending_command = raw_cmd
                         waiting = True
                         waiting_dots = 0
@@ -260,10 +287,7 @@ def run():
                             input_text = input_history[history_index]
                 elif event.key == pygame.K_BACKSPACE:
                     input_text = input_text[:-1]
-                elif event.key == pygame.K_i:
-                    show_inventory_panel = not show_inventory_panel
-                elif event.key == pygame.K_d:
-                    show_dice_breakdown = not show_dice_breakdown
+                # Removed inventory (i) and dice (d) hotkeys to allow free typing.
                 elif event.key == pygame.K_F8:
                     # Toggle vsync (recreate display surface)
                     vsync_enabled = not vsync_enabled
@@ -324,6 +348,10 @@ def run():
                     for lbl, rect in action_button_rects:
                         if rect.collidepoint(mx, my):
                             input_text = lbl
+                            try:
+                                voice.stop_all()
+                            except Exception:
+                                pass
                             pending_command = lbl
                             waiting = True
                             waiting_dots = 0
@@ -344,6 +372,10 @@ def run():
                                     p0, p1 = clean.split('.',1)
                                     if p0.strip().isdigit():
                                         clean = p1.strip()
+                                try:
+                                    voice.stop_all()
+                                except Exception:
+                                    pass
                                 pending_command = clean.lower()
                                 waiting = True
                                 waiting_dots = 0
@@ -356,6 +388,10 @@ def run():
                     if pending_command is None and room_click_rects:
                         for rid, rrect, adjacent_dir in room_click_rects:
                             if rrect.collidepoint(mx, my) and adjacent_dir:
+                                try:
+                                    voice.stop_all()
+                                except Exception:
+                                    pass
                                 pending_command = f"[BRIEF] move {adjacent_dir}"
                                 waiting = True
                                 waiting_dots = 0
@@ -576,22 +612,43 @@ def run():
         # --- Battle Options Buttons ---
         battle_button_rects.clear()
         if battle_options:
-            panel_width = min(480, output_area.width - 32)
-            panel_rect = pygame.Rect(output_area.x + 16, output_area.y + output_area.height - 12 - 28 * (len(battle_options)+1), panel_width, 28 * (len(battle_options)+1))
+            panel_width = min(520, output_area.width - 32)
+            # dynamic panel height based on wrapped options
+            wrapped_opts = []
+            max_w = panel_width - 48
+            for opt in battle_options:
+                words = opt.strip().split()
+                lines = []
+                cur = ''
+                for w in words:
+                    test = cur + (' ' if cur else '') + w
+                    if output_font.size(test)[0] <= max_w:
+                        cur = test
+                    else:
+                        if cur:
+                            lines.append(cur)
+                        cur = w
+                if cur:
+                    lines.append(cur)
+                wrapped_opts.append((opt.strip(), lines))
+            panel_height = 52 + sum(8 + 20*len(lines) for _, lines in wrapped_opts)
+            panel_rect = pygame.Rect(output_area.x + 16, output_area.y + output_area.height - 12 - panel_height, panel_width, panel_height)
             pygame.draw.rect(screen, (32, 32, 60), panel_rect, border_radius=12)
             pygame.draw.rect(screen, (140, 140, 220), panel_rect, 2, border_radius=12)
             title = output_font.render("Choose an action:", True, (210,210,255))
             screen.blit(title, (panel_rect.x + 12, panel_rect.y + 6))
-            y_off = panel_rect.y + 6 + 24
-            for opt in battle_options:
-                opt_clean = opt.strip()
-                btn = pygame.Rect(panel_rect.x + 12, y_off, panel_rect.width - 24, 24)
+            y_off = panel_rect.y + 32
+            battle_button_rects.clear()
+            for opt_clean, lines in wrapped_opts:
+                btn_h = 8 + 20*len(lines)
+                btn = pygame.Rect(panel_rect.x + 12, y_off, panel_rect.width - 24, btn_h)
                 pygame.draw.rect(screen, (60, 60, 100), btn, border_radius=6)
                 pygame.draw.rect(screen, (150, 150, 230), btn, 1, border_radius=6)
-                txtsurf = output_font.render(opt_clean, True, (240,240,255))
-                screen.blit(txtsurf, (btn.x + 6, btn.y + 2))
+                for i_l, l in enumerate(lines):
+                    txtsurf = output_font.render(l, True, (240,240,255))
+                    screen.blit(txtsurf, (btn.x + 6, btn.y + 4 + i_l*20))
                 battle_button_rects.append((opt_clean, btn))
-                y_off += 26
+                y_off += btn_h + 6
 
         # --- Tooltip for room hover ---
         if hover_room_id and hover_room_id in state.rooms:
@@ -953,6 +1010,10 @@ def run():
                 head_btn = raw_cmd_btn.split(' ')[0].lower()
                 if head_btn in {"move","go","walk","run","flee","look"}:
                     raw_cmd_btn = f"[BRIEF] {raw_cmd_btn}"
+                try:
+                    voice.stop_all()
+                except Exception:
+                    pass
                 pending_command = raw_cmd_btn
                 waiting = True
                 waiting_dots = 0
@@ -966,6 +1027,9 @@ def run():
             prev_location = state.player.location
             roll_result_to_send = None
             output_lines = [f"> {pending_command}"]
+            # Determine if this is a movement-like command to allow enemy movement/spawn
+            cmd_lower_for_spawn = pending_command.lower()
+            is_movement_cmd = any(cmd_lower_for_spawn.startswith(t) for t in ["move","go","walk","run","flee"]) or cmd_lower_for_spawn.startswith("[brief] move")
             if battle_options:
                 cmd_lower = pending_command.lower()
                 selected_option = None
@@ -1035,8 +1099,22 @@ def run():
                     for para in narrative.split('\n'):
                         for line in wrap_text(para, output_font, output_area.width-32):
                             output_lines.append(line)
-                battle_options = options if options else None
-                battle_force_select = force_option_select if options else False
+                    # Terminal echo of raw narrative & options
+                    try:
+                        if narrative.strip():
+                            print(narrative)
+                        if options:
+                            print("Options:")
+                            for o in options:
+                                print("  " + o)
+                    except Exception:
+                        pass
+                if pending_command.lower().startswith('/hint') and options:
+                    battle_options = options
+                    battle_force_select = force_option_select
+                else:
+                    battle_options = None
+                    battle_force_select = False
             except Exception as e:
                 output_lines.append(f"Error: {e}")
                 battle_options = None
@@ -1046,13 +1124,19 @@ def run():
             # Append to scene log
             for ln in output_lines:
                 scene_log.append(ln)
+                try:
+                    print(ln)
+                except Exception:
+                    pass
             if len(scene_log) > 5000:
                 scene_log = scene_log[-5000:]
             if was_at_bottom:
-                output_scroll = max(0, len(output_lines) - max_output_lines)
+                # Force view to remain at bottom of full log (not just new batch)
+                output_scroll = 10**9  # will be clamped next render cycle
             input_text = ""  # Clear input after response
             # Only move/spawn enemies if not in battle dialog
-            if not battle_options:
+            if not battle_options and is_movement_cmd:
+                # Only update wandering / spawning on movement commands
                 state = move_non_boss_enemies(state, GRID_W, GRID_H)
                 while count_non_boss_enemies(state) < 2:
                     state = spawn_enemy(state, enemy_sprites)
@@ -1090,6 +1174,8 @@ def run():
             prev_location = state.player.location
             roll_result_to_send = None
             output_lines = [f"> {pending_command}"]
+            cmd_lower_for_spawn = pending_command.lower()
+            is_movement_cmd = any(cmd_lower_for_spawn.startswith(t) for t in ["move","go","walk","run","flee"]) or cmd_lower_for_spawn.startswith("[brief] move")
             if battle_options:
                 cmd_lower = pending_command.lower()
                 selected_option = None
@@ -1159,8 +1245,12 @@ def run():
                     for para in narrative.split('\n'):
                         for line in wrap_text(para, output_font, output_area.width-32):
                             output_lines.append(line)
-                battle_options = options if options else None
-                battle_force_select = force_option_select if options else False
+                if pending_command.lower().startswith('/hint') and options:
+                    battle_options = options
+                    battle_force_select = force_option_select
+                else:
+                    battle_options = None
+                    battle_force_select = False
             except Exception as e:
                 output_lines.append(f"Error: {e}")
                 battle_options = None
@@ -1171,9 +1261,9 @@ def run():
             if len(scene_log) > 5000:
                 scene_log = scene_log[-5000:]
             if was_at_bottom:
-                output_scroll = max(0, len(output_lines) - max_output_lines)
+                output_scroll = 10**9
             input_text = ""
-            if not battle_options:
+            if not battle_options and is_movement_cmd:
                 state = move_non_boss_enemies(state, GRID_W, GRID_H)
                 while count_non_boss_enemies(state) < 2:
                     state = spawn_enemy(state, enemy_sprites)

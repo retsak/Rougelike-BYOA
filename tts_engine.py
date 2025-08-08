@@ -67,13 +67,19 @@ def _chunk_text(text: str, limit: int) -> List[str]:
 
 class OpenAITTS:
     def __init__(self, enabled: bool) -> None:
+        # Core configuration
         self.enabled = bool(enabled) and bool(OPENAI_API_KEY)
         self._q: "queue.Queue[str | None]" = queue.Queue()
         self.volume = max(0.0, min(1.0, TTS_VOLUME))
         self.rate = max(0.5, min(2.0, TTS_RATE))
         self.offline_fallback = TTS_OFFLINE_FALLBACK
+        # Playback control / interruption
+        self._lock = threading.Lock()
+        self._current_play_obj = None  # Will hold simpleaudio.PlayObject
+        # Background worker
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+        # Diagnostics
         if not OPENAI_API_KEY:
             print("[TTS] OPENAI_API_KEY not set; narration voice disabled.")
         if sa is None:
@@ -105,6 +111,26 @@ class OpenAITTS:
         if self.enabled:
             self._q.put(None)
             # Do not join to avoid hanging on exit; thread is daemon.
+
+    def stop_all(self) -> None:
+        """Immediately stop current playback and flush any queued narration.
+
+        Called when the player submits new input so fresh narrative can begin
+        without overlapping with old audio.
+        """
+        try:
+            self.flush_queue()
+            if sa is None:
+                return
+            with self._lock:
+                if self._current_play_obj is not None:
+                    try:
+                        self._current_play_obj.stop()
+                    except Exception:
+                        pass
+                    self._current_play_obj = None
+        except Exception:
+            pass
 
     # Internal worker
     def _run(self) -> None:  # pragma: no cover - background thread
@@ -178,9 +204,15 @@ class OpenAITTS:
             # Block until this chunk finishes so ordering is preserved and audio doesn't overlap.
             try:
                 play_obj = wave_obj.play()
+                with self._lock:
+                    self._current_play_obj = play_obj
                 play_obj.wait_done()
             except Exception as e:
                 print(f"[TTS] Playback error: {e}")
+            finally:
+                with self._lock:
+                    if self._current_play_obj == play_obj:  # type: ignore
+                        self._current_play_obj = None
 
     def _play_tone(self, freq: int, duration: float) -> None:
         if sa is None:

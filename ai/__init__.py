@@ -105,8 +105,11 @@ def call_openai(state: GameState, cmd: str, model: str, roll_result: int | None 
     if "[BRIEF]" in cmd:
         brief = True
         cmd = cmd.replace("[BRIEF]", "").strip()
+    # Prepare state snapshot, but strip internal-only / non-JSON friendly pieces (ensure lists not sets)
+    state_dict = asdict(state)
+    # Replace any 'room_X' style location names in narrative phase later; keep internal ids here
     user_payload = {
-        "state": asdict(state),
+        "state": state_dict,
         "command": cmd,
         "roll_result": roll_result,
         "history": state.history[-10:]
@@ -433,6 +436,13 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
         # if streak length large and narrative long, compress current narrative
         if len(movement_streak) > 2 and len(narrative.split()) > 40:
             narrative = f"You continue ({movement_streak[-3:]}) through the dungeon."
+    # Replace internal room ids like room_3 with more user-friendly terms if they appear verbatim
+    # Simple heuristic: room_<number> -> "the chamber" (first) or "the next chamber"
+    import re
+    def _room_sub(match, counter={'n':0}):
+        counter['n'] += 1
+        return 'the chamber' if counter['n']==1 else 'the next chamber'
+    narrative = re.sub(r"room_\d+", _room_sub, narrative)
     dm_say(narrative)
     # Return the full OpenAI response dict, plus any modifications
     openai_resp["narrative"] = narrative

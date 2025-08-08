@@ -66,27 +66,48 @@ def pick_background_for_room(room, backgrounds):
     return None
 
 def load_ambient_loops():
-    """Load ambient audio loops (wav/mp3) mapping stem->Sound."""
+    """Load ambient audio/music loops (long background tracks)."""
     loops = {}
     if not AUDIO_DIR.exists():
         return loops
     for path in AUDIO_DIR.glob("*.*"):
         if path.suffix.lower() not in {".wav", ".mp3", ".ogg"}:
             continue
+        stem = path.stem.lower()
+        # Heuristic: treat very short SFX-like names (footsteps, sword, success) as non-ambient
+        if any(key in stem for key in ["footsteps","sword","success","slash"]):
+            continue
         try:
-            loops[path.stem.lower()] = pygame.mixer.Sound(str(path))
+            loops[stem] = pygame.mixer.Sound(str(path))
         except Exception:
             continue
     return loops
 
+def load_sfx():
+    """Load short sound effects (non-looping)."""
+    sfx = {}
+    if not AUDIO_DIR.exists():
+        return sfx
+    for path in AUDIO_DIR.glob("*.*"):
+        if path.suffix.lower() not in {".wav", ".mp3", ".ogg"}:
+            continue
+        stem = path.stem.lower()
+        if any(key in stem for key in ["footsteps","sword","success","slash","door"]):
+            try:
+                sfx[stem] = pygame.mixer.Sound(str(path))
+            except Exception:
+                pass
+    return sfx
+
 ROOM_TYPE_TO_LOOP_KEYS = {
+    # Only musical / ambient loops here now; SFX removed
     "entrance": ["wizard-rider-enchanted-fantasy-orchestral-loop-379413"],
-    "corridor": ["concrete-footsteps-1-6265"],
-    "enemy_lair": ["sword-slash-and-swing-185432"],
-    "treasure": ["short-success-sound-glockenspiel-treasure-video-game-6346"],
-    "trap": ["concrete-footsteps-1-6265"],
+    "corridor": ["wizard-rider-enchanted-fantasy-orchestral-loop-379413"],
+    "enemy_lair": ["wizard-rider-enchanted-fantasy-orchestral-loop-379413"],
+    "treasure": ["wizard-rider-enchanted-fantasy-orchestral-loop-379413"],
+    "trap": ["wizard-rider-enchanted-fantasy-orchestral-loop-379413"],
     "shrine": ["wizard-rider-enchanted-fantasy-orchestral-loop-379413"],
-    "locked": ["concrete-footsteps-1-6265"],
+    "locked": ["wizard-rider-enchanted-fantasy-orchestral-loop-379413"],
     "boss_room": ["wizard-rider-enchanted-fantasy-orchestral-loop-379413"],
 }
 
