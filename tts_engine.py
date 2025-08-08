@@ -26,6 +26,9 @@ try:
         TTS_VOICE,
         TTS_FORMAT,
         TTS_MAX_CHARS,
+        TTS_VOLUME,
+        TTS_RATE,
+        TTS_OFFLINE_FALLBACK,
     )
 except Exception:  # pragma: no cover - fallback defaults
     TTS_ENABLED = True
@@ -33,6 +36,9 @@ except Exception:  # pragma: no cover - fallback defaults
     TTS_VOICE = "onyx"
     TTS_FORMAT = "wav"
     TTS_MAX_CHARS = 600
+    TTS_VOLUME = 0.9
+    TTS_RATE = 1.0
+    TTS_OFFLINE_FALLBACK = True
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 API_URL = "https://api.openai.com/v1/audio/speech"
@@ -63,6 +69,9 @@ class OpenAITTS:
     def __init__(self, enabled: bool) -> None:
         self.enabled = bool(enabled) and bool(OPENAI_API_KEY)
         self._q: "queue.Queue[str | None]" = queue.Queue()
+        self.volume = max(0.0, min(1.0, TTS_VOLUME))
+        self.rate = max(0.5, min(2.0, TTS_RATE))
+        self.offline_fallback = TTS_OFFLINE_FALLBACK
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         if not OPENAI_API_KEY:
@@ -75,6 +84,22 @@ class OpenAITTS:
             return
         for chunk in _chunk_text(text, TTS_MAX_CHARS):
             self._q.put(chunk)
+
+    def flush_queue(self) -> int:
+        flushed = 0
+        try:
+            while True:
+                self._q.get_nowait()
+                flushed += 1
+        except queue.Empty:
+            pass
+        return flushed
+
+    def set_volume(self, v: float) -> None:
+        self.volume = max(0.0, min(1.0, v))
+
+    def set_rate(self, r: float) -> None:
+        self.rate = max(0.5, min(2.0, r))
 
     def shutdown(self) -> None:
         if self.enabled:
@@ -111,6 +136,8 @@ class OpenAITTS:
                 # Try to extract JSON error if present
                 snippet = r.text[:200].replace('\n', ' ')
                 print(f"[TTS] HTTP {r.status_code} ({ct}): {snippet}")
+                if self.offline_fallback:
+                    self._play_tone(440, 0.15)
                 return
             data = r.content
             # Diagnostics: verify WAV header if requested
@@ -130,18 +157,23 @@ class OpenAITTS:
                               "      Set TTS_FORMAT='mp3' or install pydub/ffmpeg for MP3 support.")
                     else:
                         print(f"[TTS] Unexpected audio header (first 16 bytes): {prefix!r}")
+                    if self.offline_fallback:
+                        self._play_tone(330, 0.15)
                     return
                 self._play_wav_bytes(data)
             else:
                 print(f"[TTS] Format {TTS_FORMAT} playback not implemented.")
         except Exception as e:  # pragma: no cover
             print(f"[TTS] Exception: {e}")
+            if self.offline_fallback:
+                self._play_tone(220, 0.15)
 
     def _play_wav_bytes(self, raw: bytes) -> None:
         if sa is None:
             return
         with wave.open(io.BytesIO(raw)) as wf:
             frames = wf.readframes(wf.getnframes())
+            # (Rate change not implemented for simplicity; would require resampling.)
             wave_obj = sa.WaveObject(frames, wf.getnchannels(), wf.getsampwidth(), wf.getframerate())
             # Block until this chunk finishes so ordering is preserved and audio doesn't overlap.
             try:
@@ -149,6 +181,24 @@ class OpenAITTS:
                 play_obj.wait_done()
             except Exception as e:
                 print(f"[TTS] Playback error: {e}")
+
+    def _play_tone(self, freq: int, duration: float) -> None:
+        if sa is None:
+            return
+        import math
+        sample_rate = 22050
+        n = int(sample_rate * duration)
+        amp = int(32767 * self.volume * 0.4)
+        buf = bytearray()
+        for i in range(n):
+            val = int(amp * math.sin(2 * math.pi * freq * (i / sample_rate)))
+            buf += val.to_bytes(2, 'little', signed=True)
+        try:
+            wave_obj = sa.WaveObject(bytes(buf), 1, 2, sample_rate)
+            play_obj = wave_obj.play()
+            play_obj.wait_done()
+        except Exception:
+            pass
 
 
 voice = OpenAITTS(enabled=TTS_ENABLED)

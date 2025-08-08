@@ -15,6 +15,10 @@ def move_non_boss_enemies(state, grid_w, grid_h):
         for e in room["enemies"]
         if e["name"] != "dungeon_boss"
     }
+    # Defensive: if AI/state delta created an invalid location, clamp to entrance or first room.
+    if state.player.location not in state.rooms:
+        fallback = 'room_0' if 'room_0' in state.rooms else next(iter(state.rooms))
+        state.player.location = fallback
     player_coord = state.rooms[state.player.location]["coords"]
     directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
 
@@ -87,6 +91,7 @@ def spawn_enemy(state, enemy_sprites):
     room_id = random.choice(possible_rooms)
     name = random.choice([k for k in ENEMIES if k != "dungeon_boss"])
     enemy = {**ENEMIES[name], "name": name}
+    enemy["max_hp"] = enemy.get("hp", 1)
     sprite_keys = [k for k in enemy_sprites if name in k]
     enemy["sprite"] = random.choice(sprite_keys) if sprite_keys else None
     new_rooms = copy.deepcopy(state.rooms)
@@ -122,5 +127,18 @@ def attack_enemy(state, enemy, screen, font):
     animate_d20_roll(screen, font, roll_result)
     damage = roll_result + state.player.str
     enemy["hp"] -= damage
+    # Simple showcase: on a natural 1, player becomes 'poisoned' (example status); on 20 apply 'burning' to enemy
+    if roll_result == 1:
+        if hasattr(state.player, 'conditions'):
+            if 'poisoned' not in state.player.conditions:
+                state.player.conditions.append('poisoned')
+    elif roll_result == 20:
+        # ensure enemy conditions is list for consistency
+        cond_list = enemy.setdefault('conditions', [])
+        if isinstance(cond_list, set):
+            cond_list = list(cond_list)
+            enemy['conditions'] = cond_list
+        if 'burning' not in cond_list:
+            cond_list.append('burning')
     msg = f"You rolled a {roll_result} and dealt {damage} damage to {enemy['name']}!"
     return msg, roll_result

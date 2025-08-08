@@ -101,14 +101,21 @@ def call_openai(state: GameState, cmd: str, model: str, roll_result: int | None 
         client = OpenAI(api_key=api_key)
 
     # Pass history as context for memory
+    brief = False
+    if "[BRIEF]" in cmd:
+        brief = True
+        cmd = cmd.replace("[BRIEF]", "").strip()
+    user_payload = {
+        "state": asdict(state),
+        "command": cmd,
+        "roll_result": roll_result,
+        "history": state.history[-10:]
+    }
+    if brief:
+        user_payload["style_hint"] = "Provide a concise 2-3 sentence scene description focused on immediate tactical context."
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": json.dumps({
-            "state": asdict(state),
-            "command": cmd,
-            "roll_result": roll_result,  # Include roll result
-            "history": state.history[-10:]  # Last 10 events for context
-        })},
+        {"role": "system", "content": SYSTEM_PROMPT + (" Always keep movement-only responses to 2-3 sentences unless player asks for detail." if brief else "")},
+        {"role": "user", "content": json.dumps(user_payload)},
     ]
     resp = client.responses.create(
         model=model,
@@ -132,7 +139,10 @@ def get_api_call_counter() -> int:
     return api_call_counter
 
 
-META_CMDS = {"/save", "/load", "/quit", "/exit", "/stats", "/inventory", "/look", "/loot", "/map", "/help", "/ability"}
+META_CMDS = {"/save", "/load", "/quit", "/exit", "/stats", "/inventory", "/look", "/loot", "/map", "/help", "/ability", "/detail", "/equip", "/use", "/skipvoice", "/voicevol", "/voicespeed"}
+
+# Track a simple movement streak to compress repetitive corridor narration
+movement_streak: list[str] = []  # list of direction tokens
 
 
 def handle_meta(cmd: str, state: GameState, save_file) -> bool:
@@ -159,7 +169,9 @@ def handle_meta(cmd: str, state: GameState, save_file) -> bool:
         return True
     if lc == "/inventory":
         inv = state.player.inventory or ["(empty)"]
-        print("Inventory: " + ", ".join(inv) + "\n")
+        equipped = ", ".join(f"{slot}:{item}" for slot,item in state.player.equipped.items()) or "(none)"
+        print("Inventory: " + ", ".join(inv))
+        print("Equipped: " + equipped + "\n")
         return True
     if lc == "/look":
         room = state.rooms[state.player.location]
@@ -240,10 +252,73 @@ Available commands:
   /stats        Show your stats
   /ability      Use your hero's special ability
   /map          Show a map of the dungeon
+  /detail       Ask for a richer description of current location
   /save         Save your game
   /load         Load your game
   /quit, /exit  Quit the game
 """)
+        return True
+    if lc == "/detail":
+        room = state.rooms[state.player.location]
+        desc = f"(Detail) You focus your senses on this {room['type'].replace('_',' ')}. "
+        if room["enemies"]:
+            desc += "Hostile presence: " + ", ".join(e["name"] for e in room["enemies"]) + ". "
+        if room["items"]:
+            desc += "Items here: " + ", ".join(room["items"]) + ". "
+        if room.get("locked"):
+            desc += "A heavy lock bars one way. "
+        if room.get("trap"):
+            desc += "The floor bears suspicious seams—likely a trap. "
+        print(desc + "\n")
+        return True
+    if lc.startswith('/skipvoice'):
+        from tts_engine import voice
+        flushed = voice.flush_queue()
+        print(f"[Voice] Skipped {flushed} queued narration segment(s).\n")
+        return True
+    if lc.startswith('/voicevol'):
+        parts = cmd.split()
+        if len(parts) == 2:
+            try:
+                val = float(parts[1])
+                from tts_engine import voice
+                voice.set_volume(val)
+                print(f"[Voice] Volume set to {voice.volume:.2f}.\n")
+            except ValueError:
+                print("Usage: /voicevol <0.0-1.0>\n")
+        else:
+            print("Usage: /voicevol <0.0-1.0>\n")
+        return True
+    if lc.startswith('/voicespeed'):
+        parts = cmd.split()
+        if len(parts) == 2:
+            try:
+                val = float(parts[1])
+                from tts_engine import voice
+                voice.set_rate(val)
+                print(f"[Voice] Speed multiplier set to {voice.rate:.2f}.\n")
+            except ValueError:
+                print("Usage: /voicespeed <multiplier> (e.g. 1.2)\n")
+        else:
+            print("Usage: /voicespeed <multiplier> (e.g. 1.2)\n")
+        return True
+    if lc.startswith("/equip"):
+        parts = cmd.split(maxsplit=1)
+        if len(parts) == 1:
+            print("Usage: /equip <item name>\n")
+        else:
+            item = parts[1].strip()
+            msg = state.player.equip_item(item)
+            print(msg + "\n")
+        return True
+    if lc.startswith("/use"):
+        parts = cmd.split(maxsplit=1)
+        if len(parts) == 1:
+            print("Usage: /use <item name>\n")
+        else:
+            item = parts[1].strip()
+            msg = state.player.consume_item(item)
+            print(msg + "\n")
         return True
     return False
 
@@ -252,9 +327,13 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
     """Process a player command and merge the resulting state changes."""
     old_location = state.player.location if hasattr(state.player, 'location') else None
     if cmd.startswith("/"):
-        if handle_meta(cmd, state, save_file):
-            return {"narrative": "", "state_delta": {}}
-        print("[!] Unknown command:", cmd)
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            handled = handle_meta(cmd, state, save_file)
+        meta_out = buf.getvalue().strip()
+        if handled:
+            return {"narrative": meta_out, "state_delta": {}}
         return {"narrative": "[!] Unknown command.", "state_delta": {}}
     openai_resp = call_openai(state, cmd, model, roll_result)
     narrative, state_delta = openai_resp["narrative"], openai_resp["state_delta"]
@@ -276,6 +355,52 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
             state.player = Player(**dict(state.player))
         except Exception:
             pass
+    # --- Sanitize player location if model produced an invalid room id ---
+    def _sanitize_location() -> None:
+        loc = state.player.location
+        if loc in state.rooms:
+            return
+        # Attempt to parse patterns like 'room_X_direction'
+        if '_' in loc:
+            base, *rest = loc.split('_')
+            if base == 'room' and len(rest) >= 2:
+                # pattern room_<index>_direction
+                try:
+                    idx = int(rest[0])
+                except ValueError:
+                    idx = None
+                direction = rest[-1].lower()
+                if idx is not None:
+                    # reconstruct valid room id from idx
+                    candidate = f"room_{idx}"
+                    if candidate in state.rooms:
+                        # derive target via direction from candidate coords
+                        cx, cy = state.rooms[candidate]["coords"]
+                        deltas = {"north": (0, -1), "south": (0, 1), "east": (1, 0), "west": (-1, 0)}
+                        if direction in deltas:
+                            dx, dy = deltas[direction]
+                            tx, ty = cx + dx, cy + dy
+                            # Build coord->id map once
+                            coord_to_id = {r["coords"]: rid for rid, r in state.rooms.items()}
+                            target_id = coord_to_id.get((tx, ty))
+                            if target_id:
+                                state.player.location = target_id
+                                state.rooms[target_id]["visited"] = True
+                                return
+                        # Fallback to candidate if direction invalid
+                        state.player.location = candidate
+                        return
+        # Final fallback: revert to old_location if valid, else entrance
+        if old_location and old_location in state.rooms:
+            state.player.location = old_location
+        else:
+            # choose safest default
+            if 'room_0' in state.rooms:
+                state.player.location = 'room_0'
+            else:
+                # arbitrary first key
+                state.player.location = next(iter(state.rooms))
+    _sanitize_location()
     # --- Enemy reaction logic ---
     room = state.rooms[state.player.location]
     living_enemies = [e for e in room["enemies"] if e.get("hp", 0) > 0]
@@ -289,6 +414,25 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
         else:
             state_delta["hp"] = state.player.hp
     # Speak + print the narrative using the TTS engine.
+    # Movement compression: detect sequences of brief movement commands
+    lower_cmd = cmd.lower()
+    moved = False
+    for token in ("move ", "go ", "walk "):
+        if lower_cmd.startswith(token):
+            direction = lower_cmd.split(' ')[1] if len(lower_cmd.split(' ')) > 1 else "?"
+            movement_streak.append(direction)
+            moved = True
+            break
+    if not moved:
+        # flush streak if present and user did a non-move action
+        if movement_streak:
+            if len(movement_streak) > 2:
+                narrative = f"You traverse {len(movement_streak)} quiet passages ({', '.join(movement_streak)}).\n" + narrative
+            movement_streak.clear()
+    else:
+        # if streak length large and narrative long, compress current narrative
+        if len(movement_streak) > 2 and len(narrative.split()) > 40:
+            narrative = f"You continue ({movement_streak[-3:]}) through the dungeon."
     dm_say(narrative)
     # Return the full OpenAI response dict, plus any modifications
     openai_resp["narrative"] = narrative

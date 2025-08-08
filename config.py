@@ -18,3 +18,12 @@ TTS_VOICE: str = "onyx"
 TTS_FORMAT: str = "wav"
 # Maximum characters per chunk sent to TTS (long narratives are split to avoid latency/timeouts).
 TTS_MAX_CHARS: int = 600
+# Playback volume scaling (0.0 - 1.0 applied client-side after synthesis if supported)
+TTS_VOLUME: float = 0.9
+# Speaking rate multiplier (1.0 = normal). Implemented by naive frame duplication/drop or API param if available.
+TTS_RATE: float = 1.0
+# Allow offline fallback (simple tone) when API unavailable.
+TTS_OFFLINE_FALLBACK: bool = True
+
+# Ambient audio
+AMBIENT_VOLUME: float = 0.35  # 0.0 - 1.0
