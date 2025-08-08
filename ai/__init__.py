@@ -121,10 +121,34 @@ def call_openai(state: GameState, cmd: str, model: str, roll_result: int | None 
             for c in item.content:
                 if c.type == "output_text":
                     content += c.text
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError:
-        data = {"narrative": content, "state_delta": {}}
+    # Attempt to separate a trailing JSON object from leading freeform narrative if model mixed styles
+    raw = content.strip()
+    data = None
+    if raw:
+        if raw.startswith('{'):
+            try:
+                data = json.loads(raw)
+            except Exception:
+                data = None
+        if data is None:
+            # Look for last '{' and attempt to parse from there
+            idx = raw.rfind('{')
+            if idx != -1:
+                possible = raw[idx:]
+                try:
+                    parsed_tail = json.loads(possible)
+                    # Everything before idx is narrative prefix
+                    prefix = raw[:idx].strip()
+                    if isinstance(parsed_tail, dict):
+                        # Merge: prefer parsed_tail fields; put prefix (if any) before narrative
+                        tail_narr = parsed_tail.get('narrative', '')
+                        if prefix:
+                            parsed_tail['narrative'] = (prefix + ('\n' + tail_narr if tail_narr else '')).strip()
+                        data = parsed_tail
+                except Exception:
+                    pass
+    if data is None:
+        data = {"narrative": raw, "state_delta": {}}
     # Strip options if not in hint mode regardless of model output
     if not hint_mode and isinstance(data, dict):
         if 'options' in data:
@@ -159,14 +183,20 @@ def call_openai(state: GameState, cmd: str, model: str, roll_result: int | None 
         for ln in lines:
             low = ln.strip().lower()
             # Start of state changes block
-            if not skip_mode and low.startswith('state changes:'):
+            if not skip_mode and (low.startswith('state changes:') or low.startswith('state updates:') or low.startswith('state delta:') or low.startswith('updates:')):
                 skip_mode = True
                 continue
             if skip_mode:
-                # end when blank line encountered
-                if not ln.strip():
+                # end when blank line encountered or line no longer looks like a bullet / debug
+                if (not ln.strip()) or (not ln.lstrip().startswith('-')):
+                    # allow consumption of a trailing 'narrative ends' marker silently
+                    if ln.strip().lower().startswith('narrative ends'):
+                        continue
                     skip_mode = False
-                continue
+                    if not ln.strip():
+                        continue  # don't include the blank line
+                else:
+                    continue
             # Skip lines that look like explicit '(state_delta)' marker
             if low.startswith('(state_delta)'):
                 continue
@@ -185,16 +215,20 @@ def call_openai(state: GameState, cmd: str, model: str, roll_result: int | None 
                     json_block = True
                     brace_depth = ln.count('{') - ln.count('}')
                 continue
-            # Detect raw JSON block heuristically: line starts with '{' and contains '"player"' or '"rooms"'
-            if not json_block and ln.strip().startswith('{') and ('"player"' in ln or '"rooms"' in ln):
+            # Detect raw JSON block heuristically: line starts with '{' (even if first line only has '"narrative"')
+            if not json_block and ln.strip().startswith('{'):
+                # treat as potential JSON block start
                 json_block = True
-                # Track braces to know when to end
                 brace_depth = ln.count('{') - ln.count('}')
                 continue
             if json_block:
                 brace_depth += ln.count('{') - ln.count('}')
                 if brace_depth <= 0:
                     json_block = False
+                continue
+            # Remove dot-notation debug state lines like player.location: xxx or rooms.room_2.visited: true
+            if ':' in ln and (low.startswith('player.') or low.startswith('rooms.')):
+                # treat as debug and drop
                 continue
             cleaned.append(ln)
         # Trim leading/trailing empty lines
@@ -500,13 +534,42 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
     hint_mode = cmd.lower().startswith('/hint')
     # Remove the /hint token from the command sent to the model for cleaner language understanding
     model_cmd = cmd[5:].strip() if hint_mode else cmd
+    # For engine-side logic (movement detection etc.) we need a version without the [BRIEF] tag
+    logic_cmd = model_cmd.replace('[BRIEF]', '').replace('[brief]', '').strip()
     # Natural language commands always advance time
     _tick_time(state, True)
+    # --- Engine-side movement resolution (pre-model) ---
+    lower_logic_cmd = logic_cmd.lower()
+    tokens = lower_logic_cmd.split()
+    if tokens and tokens[0] in {"move","go","walk","run"}:
+        if len(tokens) >= 2:
+            direction = tokens[1]
+            deltas = {"north": (0,-1), "south": (0,1), "east": (1,0), "west": (-1,0)}
+            if direction in deltas:
+                dx, dy = deltas[direction]
+                # locate current coords
+                try:
+                    cx, cy = state.rooms[state.player.location]["coords"]
+                    target = (cx + dx, cy + dy)
+                    # build coord->id map
+                    coord_map = {tuple(r["coords"]): rid for rid, r in state.rooms.items()}
+                    target_id = coord_map.get(target)
+                    if target_id:
+                        # Check locked
+                        tgt_room = state.rooms[target_id]
+                        if tgt_room.get("locked"):
+                            # movement blocked; we keep location same
+                            pass
+                        else:
+                            state.player.location = target_id
+                            state.rooms[target_id]["visited"] = True
+                except Exception:
+                    pass
     auto_roll_summary = None
     # Determine if we should auto-roll (only if no explicit roll_result passed and autoroll is on and command is not a movement/basic look)
     def _is_movement_like(c: str) -> bool:
-        c = c.lower().strip()
-        return c.startswith(("move","go","walk","run","look","flee","attack"))
+        base = c.replace('[BRIEF]','').replace('[brief]','').lower().strip()
+        return base.startswith(("move","go","walk","run","look","flee","attack"))
     if roll_result is None and autoroll_enabled and not cmd.startswith('/') and not _is_movement_like(model_cmd):
         # Perform auto-roll (with optional advantage/disadvantage)
         r1 = random.randint(1,20)
@@ -535,6 +598,9 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
         for k, v in list(state_delta.items()):
             if k == 'player' and isinstance(v, dict):
                 for pk, pv in v.items():
+                    if pk == 'location':
+                        # Ignore model attempts to move player; engine already handled movement.
+                        continue
                     if hasattr(state.player, pk):
                         try:
                             setattr(state.player, pk, pv)

@@ -896,6 +896,7 @@ def run():
         living_enemies = [e for e in current_room.get("enemies", []) if e.get("hp",0) > 0]
         in_combat = bool(living_enemies)
         combat_panel_rect = None
+        target_enemy_index = None
         if in_combat:
             panel_width = stats_panel.width
             panel_height = 260
@@ -910,7 +911,8 @@ def run():
             card_x = combat_panel_rect.x + 12
             card_h = 72
             quick_buttons = []
-            for enemy in living_enemies:
+            enemy_target_rects = []
+            for idx, enemy in enumerate(living_enemies):
                 card_w = panel_width - 24
                 card_rect = pygame.Rect(card_x, card_y, card_w, card_h)
                 pygame.draw.rect(screen, (40,40,80), card_rect, border_radius=10)
@@ -918,6 +920,20 @@ def run():
                 ename = enemy['name'].replace('_',' ').title()
                 name_txt = output_font.render(ename, True, (230,230,255))
                 screen.blit(name_txt, (card_rect.x + 12, card_rect.y + 8))
+                # Sprite (if available)
+                sprite_key = enemy.get('sprite')
+                if sprite_key and sprite_key in enemy_sprites:
+                    spr = enemy_sprites[sprite_key]
+                    srect = spr.get_rect()
+                    srect.top = card_rect.y + 6
+                    srect.right = card_rect.right - 8
+                    screen.blit(spr, srect)
+                    enemy_target_rects.append((idx, srect))
+                else:
+                    # Fallback circle icon clickable
+                    circle_rect = pygame.Rect(card_rect.right - 60, card_rect.y + 6, 48, 48)
+                    pygame.draw.ellipse(screen, (90,60,60), circle_rect)
+                    enemy_target_rects.append((idx, circle_rect))
                 # HP bar
                 hp = max(0, enemy.get('hp',0))
                 max_hp = enemy.get('max_hp', hp if hp>0 else 1)
@@ -931,7 +947,7 @@ def run():
                 hp_txt = output_font.render(f"{hp}/{max_hp}", True, (255,255,255))
                 screen.blit(hp_txt, (bar_rect_bg.centerx - hp_txt.get_width()//2, bar_rect_bg.y - 20))
                 card_y += card_h + card_margin
-            # Quick action buttons (Attack / Flee / Ability if available)
+            # Quick action buttons (Attack / Flee / Ability if available) - attack now requires selected target
             btns = ["attack", "flee"]
             if getattr(state.player, 'ability', None):
                 btns.append(state.player.ability.lower())
@@ -950,13 +966,30 @@ def run():
             # Handle quick button clicks
             if pygame.mouse.get_pressed()[0] and pending_command is None:
                 mx, my = pygame.mouse.get_pos()
-                for btxt, brect in quick_buttons:
-                    if brect.collidepoint(mx, my):
-                        pending_command = btxt
-                        waiting = True
-                        waiting_dots = 0
-                        waiting_start_time = time.time()
+                # Check enemy sprite click for target selection
+                for idx, erect in enemy_target_rects:
+                    if erect.collidepoint(mx, my):
+                        target_enemy_index = idx
                         break
+                # Then quick buttons
+                if target_enemy_index is None:
+                    for btxt, brect in quick_buttons:
+                        if brect.collidepoint(mx, my):
+                            # require target for attack
+                            if btxt == 'attack' and in_combat:
+                                # pick first enemy if none selected
+                                target_enemy_index = 0
+                            pending_command = btxt
+                            waiting = True
+                            waiting_dots = 0
+                            waiting_start_time = time.time()
+                            break
+            # Visual highlight of selected target (simple outline)
+            if in_combat and 'enemy_target_rects' in locals():
+                if target_enemy_index is not None:
+                    for idx, erect in enemy_target_rects:
+                        if idx == target_enemy_index:
+                            pygame.draw.rect(screen, (255,215,0), erect.inflate(6,6), 2, border_radius=6)
 
             # Combat log (recent condensed messages)
             log_x = combat_panel_rect.x + 12
@@ -1139,6 +1172,7 @@ def run():
                             break
                 if selected_option and "attack" in selected_option.lower():
                     room = state.rooms.get(state.player.location, {})
+                    # choose first living enemy for legacy numbered option flow
                     target_enemy = next((e for e in room.get('enemies', []) if e.get('hp', 0) > 0), None)
                     if target_enemy:
                         atk_msg, roll_result_to_send = attack_enemy(state, target_enemy, screen, font)
@@ -1219,6 +1253,28 @@ def run():
                 else:
                     battle_options = None
                     battle_force_select = False
+                # If attack via quick button and target selected
+                if pending_command == 'attack' and in_combat:
+                    room = state.rooms.get(state.player.location, {})
+                    living = [e for e in room.get('enemies', []) if e.get('hp',0)>0]
+                    if living:
+                        tgt = living[0]  # fallback
+                        if 'target_enemy_index' in locals() and target_enemy_index is not None and target_enemy_index < len(living):
+                            tgt = living[target_enemy_index]
+                        atk_msg, roll_result_to_send = attack_enemy(state, tgt, screen, font)
+                        combat_log.append(atk_msg)
+                        for line in wrap_text(atk_msg, output_font, output_area.width-32):
+                            output_lines.append(line)
+                        if tgt["hp"] <= 0:
+                            room["enemies"].remove(tgt)
+                            xp_gain = tgt.get("xp", 0)
+                            level_msgs = state.player.give_xp(xp_gain)
+                            defeat_msg = f"The {tgt['name'].replace('_', ' ')} is defeated! (+{xp_gain} XP)"
+                            output_lines.append(defeat_msg)
+                            combat_log.append(defeat_msg)
+                            for lm in level_msgs:
+                                output_lines.append(lm)
+                                combat_log.append(lm)
                 if auto_roll_summary:
                     output_lines.append(auto_roll_summary)
             except Exception as e:
