@@ -1030,6 +1030,15 @@ def run():
                 print(f"[debug] processing command: {pending_command}")
             except Exception:
                 pass
+            # Defensive: ensure player is Player instance (model should never replace, but guard anyway)
+            from core.models import Player as _PlayerCls
+            if isinstance(state.player, dict):
+                try:
+                    state.player = _PlayerCls(**state.player)
+                except Exception:
+                    # minimal fallback
+                    loc = state.player.get('location', 'room_0') if isinstance(state.player, dict) else 'room_0'
+                    state.player = _PlayerCls(location=loc)
             prev_location = state.player.location
             roll_result_to_send = None
             output_lines = [f"> {pending_command}"]

@@ -154,8 +154,34 @@ def get_api_call_counter() -> int:
 
 META_CMDS = {"/save", "/load", "/quit", "/exit", "/stats", "/inventory", "/look", "/loot", "/map", "/help", "/ability", "/detail", "/equip", "/use", "/skipvoice", "/voicevol", "/voicespeed"}
 
+# Default cooldown turns for hero abilities (can be overridden per balance needs)
+ABILITY_COOLDOWNS = {
+    "heal": 5,          # Cleric heal (prevents infinite loop spam)
+    "shield_block": 4,  # Knight defensive boost
+    "fire_breath": 6,   # Dragon AoE
+    "power_strike": 3,  # Fighter burst
+    "backstab": 3,      # Rogue high damage
+    "tongue_whip": 2,   # Toad moderate attack
+}
+
 # Track a simple movement streak to compress repetitive corridor narration
 movement_streak: list[str] = []  # list of direction tokens
+
+
+def _tick_time(state: GameState, advance: bool = True) -> None:
+    """Advance global turn counter and decrement ability cooldowns.
+    If advance is False no mutation occurs (used for non-time meta commands like /save,/load).
+    """
+    if not advance:
+        return
+    state.turn += 1
+    cds = getattr(state, 'ability_cooldowns', {}) or {}
+    new_cds: dict = {}
+    for abil, remaining in cds.items():
+        if remaining > 1:
+            new_cds[abil] = remaining - 1
+        # if remaining == 1 it expires this turn
+    state.ability_cooldowns = new_cds
 
 
 def handle_meta(cmd: str, state: GameState, save_file) -> bool:
@@ -214,33 +240,46 @@ def handle_meta(cmd: str, state: GameState, save_file) -> bool:
         living_enemies = [e for e in room["enemies"] if e.get("hp", 0) > 0]
         if not ability:
             print("You have no special ability.\n")
-        elif ability == "heal":
-            state.player.hp += 10
-            print("You channel divine power and heal 10 HP.\n")
-        elif ability == "shield_block":
-            state.player.hp += 5
-            print("You raise your shield and bolster your defenses, gaining 5 HP.\n")
-        elif not living_enemies:
-            print("No enemies to target with your ability.\n")
         else:
-            enemy = living_enemies[0]
-            if ability == "fire_breath":
-                dmg = state.player.str + 5
-                for e in living_enemies:
-                    e["hp"] -= dmg
-                print(f"You breathe fire, dealing {dmg} damage to all foes!\n")
-            elif ability == "power_strike":
-                dmg = state.player.str * 2
-                enemy["hp"] -= dmg
-                print(f"You deliver a power strike for {dmg} damage!\n")
-            elif ability == "backstab":
-                dmg = state.player.dex * 2
-                enemy["hp"] -= dmg
-                print(f"You backstab {enemy['name']} for {dmg} damage!\n")
-            elif ability == "tongue_whip":
-                dmg = state.player.str + state.player.dex
-                enemy["hp"] -= dmg
-                print(f"You lash out with your tongue, dealing {dmg} damage!\n")
+            # Cooldown check
+            remaining = state.ability_cooldowns.get(ability, 0) if hasattr(state, 'ability_cooldowns') else 0
+            if remaining > 0:
+                print(f"Your {ability.replace('_',' ')} ability is recharging ({remaining} turn(s) left).\n")
+                return True
+            # Execute ability
+            if ability == "heal":
+                state.player.hp += 10
+                print("You channel divine power and heal 10 HP.\n")
+                state.ability_cooldowns[ability] = ABILITY_COOLDOWNS.get(ability, 5)
+            elif ability == "shield_block":
+                state.player.hp += 5
+                print("You raise your shield and bolster your defenses, gaining 5 HP.\n")
+                state.ability_cooldowns[ability] = ABILITY_COOLDOWNS.get(ability, 4)
+            elif not living_enemies:
+                print("No enemies to target with your ability.\n")
+            else:
+                enemy = living_enemies[0]
+                if ability == "fire_breath":
+                    dmg = state.player.str + 5
+                    for e in living_enemies:
+                        e["hp"] -= dmg
+                    print(f"You breathe fire, dealing {dmg} damage to all foes!\n")
+                    state.ability_cooldowns[ability] = ABILITY_COOLDOWNS.get(ability, 6)
+                elif ability == "power_strike":
+                    dmg = state.player.str * 2
+                    enemy["hp"] -= dmg
+                    print(f"You deliver a power strike for {dmg} damage!\n")
+                    state.ability_cooldowns[ability] = ABILITY_COOLDOWNS.get(ability, 3)
+                elif ability == "backstab":
+                    dmg = state.player.dex * 2
+                    enemy["hp"] -= dmg
+                    print(f"You backstab {enemy['name']} for {dmg} damage!\n")
+                    state.ability_cooldowns[ability] = ABILITY_COOLDOWNS.get(ability, 3)
+                elif ability == "tongue_whip":
+                    dmg = state.player.str + state.player.dex
+                    enemy["hp"] -= dmg
+                    print(f"You lash out with your tongue, dealing {dmg} damage!\n")
+                    state.ability_cooldowns[ability] = ABILITY_COOLDOWNS.get(ability, 2)
         return True
     if lc == "/map":
         grid = [['#' for _ in range(6)] for _ in range(6)]
@@ -340,6 +379,25 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
     """Process a player command and merge the resulting state changes."""
     old_location = state.player.location if hasattr(state.player, 'location') else None
     if cmd.startswith("/"):
+        # Meta command time advancement rules:
+        # - /save and /load do not advance time
+        # - /ability only advances time if the ability actually fires (not while recharging)
+        # - All other meta commands advance time once when issued
+        lower_cmd = cmd.lower()
+        advance = False
+        if lower_cmd in {"/save", "/load"}:
+            advance = False
+        elif lower_cmd == "/ability":
+            abil = getattr(state.player, 'ability', None)
+            if abil:
+                remaining = getattr(state, 'ability_cooldowns', {}).get(abil, 0)
+                # Only advance if ability is ready (remaining == 0)
+                if remaining == 0:
+                    advance = True
+        else:
+            advance = True
+        if advance:
+            _tick_time(state, True)
         import io, contextlib
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -351,16 +409,40 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
     hint_mode = cmd.lower().startswith('/hint')
     # Remove the /hint token from the command sent to the model for cleaner language understanding
     model_cmd = cmd[5:].strip() if hint_mode else cmd
+    # Natural language commands always advance time
+    _tick_time(state, True)
     openai_resp = call_openai(state, model_cmd, model, roll_result, hint_mode=hint_mode)
     narrative, state_delta = openai_resp["narrative"], openai_resp["state_delta"]
     # --- Memory: append to history ---
     state.history.append({"turn": state.turn, "command": cmd, "narrative": narrative})
-    for k, v in state_delta.items():
-        current = getattr(state, k)
-        if isinstance(current, dict) and isinstance(v, dict):
-            deep_update(current, v)
-        else:
-            setattr(state, k, v)
+    # --- Safe merge of model-proposed state_delta ---
+    # The model is NOT authoritative: ignore unknown keys and never fully replace the Player object.
+    if isinstance(state_delta, dict):
+        for k, v in list(state_delta.items()):
+            if k == 'player' and isinstance(v, dict):
+                for pk, pv in v.items():
+                    if hasattr(state.player, pk):
+                        try:
+                            setattr(state.player, pk, pv)
+                        except Exception:
+                            pass
+                state_delta.pop('player', None)
+                continue
+            if k == 'history':
+                state_delta.pop('history', None)
+                continue
+            if not hasattr(state, k):
+                state_delta.pop(k, None)
+                continue
+            try:
+                current = getattr(state, k)
+                if isinstance(current, dict) and isinstance(v, dict):
+                    deep_update(current, v)
+                else:
+                    setattr(state, k, v)
+            except Exception:
+                state_delta.pop(k, None)
+                continue
     # Ensure state.player is always a Player object
     if isinstance(state.player, dict):
         if 'location' not in state.player:

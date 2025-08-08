@@ -131,6 +131,8 @@ class GameState:
     player: Player
     turn: int = 0
     history: list = field(default_factory=list)
+    # Per-ability remaining cooldown turns (0 or missing means ready)
+    ability_cooldowns: dict = field(default_factory=dict)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2)
@@ -144,4 +146,5 @@ class GameState:
             player=Player(**d["player"]),
             turn=d["turn"],
             history=d.get("history", []),
+            ability_cooldowns=d.get("ability_cooldowns", {}),
         )
