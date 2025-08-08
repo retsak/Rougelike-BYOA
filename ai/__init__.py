@@ -7,6 +7,7 @@ import os
 from dataclasses import asdict
 
 from openai import OpenAI
+from tts_engine import dm_say
 
 from core.models import GameState, Player
 from core.dungeon import deep_update
@@ -112,7 +113,6 @@ def call_openai(state: GameState, cmd: str, model: str, roll_result: int | None 
     resp = client.responses.create(
         model=model,
         input=messages,
-        temperature=0.7,
         reasoning={"effort": "minimal"},
     )
     content = ""
@@ -288,7 +288,8 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
             state_delta["hp"] -= dmg
         else:
             state_delta["hp"] = state.player.hp
-    print(narrative)
+    # Speak + print the narrative using the TTS engine.
+    dm_say(narrative)
     # Return the full OpenAI response dict, plus any modifications
     openai_resp["narrative"] = narrative
     openai_resp["state_delta"] = state_delta

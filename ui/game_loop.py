@@ -6,6 +6,7 @@ def run():
     import os
     import time  # Import time module for timeout logic
     import json
+    from tts_engine import dm_say
     from ui.assets import load_enemy_sprites, load_hero_sprites, load_backgrounds
     from ui.gameplay import (
         move_non_boss_enemies,
@@ -77,6 +78,13 @@ def run():
     input_text_color = (200, 255, 200)
 
     # --- Output State ---
+    intro_text = (
+        "Welcome, brave adventurer, to DungeonGPT! Your quest begins in a "
+        "mysterious dungeon filled with monsters, treasures, and untold dangers. "
+        "Navigate carefully, fight wisely, and may fortune favor your journey!"
+    )
+    dm_say(intro_text)
+    dm_say("Type /help to see available commands.")
     output_lines = [
         "Welcome, brave adventurer, to DungeonGPT!",
         "Your quest begins in a mysterious dungeon filled with monsters,",
