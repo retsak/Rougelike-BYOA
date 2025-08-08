@@ -217,6 +217,62 @@ def run():
     dice_interim_number = None  # rapidly changing preview number
     next_roll_result = None     # d20 result to feed into next natural-language action
 
+    # --- Pathfinding State ---
+    path_queue = []            # pending directions (strings like 'north')
+    path_highlight = []        # list of (x,y) coords along planned path (excluding current)
+    path_target_room = None    # destination room id
+
+    def _compute_path(start_id, goal_id):
+        """Return list of direction strings from start to goal (BFS), skipping locked rooms except goal."""
+        if not start_id or not goal_id or start_id == goal_id:
+            return []
+        try:
+            from collections import deque
+            id_to_coord = {rid: tuple(r["coords"]) for rid, r in state.rooms.items()}
+            coord_to_id = {tuple(r["coords"]): rid for rid, r in state.rooms.items()}
+            if start_id not in id_to_coord or goal_id not in id_to_coord:
+                return []
+            start = id_to_coord[start_id]; goal = id_to_coord[goal_id]
+            deltas = [(0,-1,'north'), (0,1,'south'), (1,0,'east'), (-1,0,'west')]
+            q = deque([start])
+            came = {start: None}
+            while q:
+                cur = q.popleft()
+                if cur == goal:
+                    break
+                for dx,dy,dn in deltas:
+                    nxt = (cur[0]+dx, cur[1]+dy)
+                    rid = coord_to_id.get(nxt)
+                    if not rid or nxt in came:
+                        continue
+                    # allow traversal if not locked or is the goal
+                    if state.rooms[rid].get('locked') and rid != goal_id:
+                        continue
+                    came[nxt] = cur
+                    q.append(nxt)
+            if goal not in came:
+                return []
+            # reconstruct coordinate path (excluding start)
+            seq = []
+            cur = goal
+            while cur != start:
+                seq.append(cur)
+                cur = came[cur]
+            seq.reverse()
+            # turn into directions
+            dirs = []
+            prev = start
+            for c in seq:
+                dx = c[0]-prev[0]; dy = c[1]-prev[1]
+                if (dx,dy)==(0,-1): dirs.append('north')
+                elif (dx,dy)==(0,1): dirs.append('south')
+                elif (dx,dy)==(1,0): dirs.append('east')
+                elif (dx,dy)==(-1,0): dirs.append('west')
+                prev = c
+            return dirs
+        except Exception:
+            return []
+
     # --- Main Loop ---
     running = True
     waiting = False
@@ -413,13 +469,58 @@ def run():
                                     voice.stop_all()
                                 except Exception:
                                     pass
-                                pending_command = f"[BRIEF] move {adjacent_dir}"
+                                # If the target room is locked attempt unlock+move if player has a key
+                                target_room = state.rooms.get(rid)
+                                if target_room and target_room.get('locked'):
+                                    has_key = any('key' in it.lower() for it in state.player.inventory)
+                                    if has_key:
+                                        pending_command = f"[BRIEF] unlock {adjacent_dir} door and go {adjacent_dir}"
+                                    else:
+                                        pending_command = f"[BRIEF] try to open locked {adjacent_dir} door"
+                                else:
+                                    pending_command = f"[BRIEF] move {adjacent_dir}"
                                 waiting = True
                                 waiting_dots = 0
                                 waiting_start_time = time.time()
                                 if not input_history or input_history[-1] != pending_command:
                                     input_history.append(pending_command)
                                 history_index = -1
+                                break
+                    # Multi-room path selection (non-adjacent click on visible visited room)
+                    if pending_command is None and room_click_rects:
+                        mx2, my2 = pygame.mouse.get_pos()
+                        for rid, rrect, adjacent_dir in room_click_rects:
+                            if rrect.collidepoint(mx2, my2) and rid and rid != state.player.location and adjacent_dir is None:
+                                rdata = state.rooms.get(rid)
+                                if not rdata or not rdata.get('visited'):
+                                    continue
+                                dirs = _compute_path(state.player.location, rid)
+                                if dirs and len(dirs) > 1:
+                                    path_queue = dirs[:]
+                                    path_target_room = rid
+                                    path_highlight = []
+                                    try:
+                                        id_to_coord = {rid0: tuple(r0['coords']) for rid0, r0 in state.rooms.items()}
+                                        cur_id = state.player.location
+                                        for d in dirs:
+                                            cx, cy = id_to_coord[cur_id]
+                                            delta = {'north':(0,-1),'south':(0,1),'east':(1,0),'west':(-1,0)}[d]
+                                            nx, ny = cx+delta[0], cy+delta[1]
+                                            path_highlight.append((nx, ny))
+                                            for rid2, rdata2 in state.rooms.items():
+                                                if tuple(rdata2['coords']) == (nx, ny):
+                                                    cur_id = rid2
+                                                    break
+                                    except Exception:
+                                        path_highlight = []
+                                break
+                    # If clicking on the same room, clear path and queue
+                    if pending_command is None and room_click_rects:
+                        for rid, rrect, adjacent_dir in room_click_rects:
+                            if rrect.collidepoint(mx, my) and rid == state.player.location:
+                                path_queue.clear()
+                                path_highlight.clear()
+                                path_target_room = None
                                 break
 
         # --- Dynamic background & ambient audio per room ---
@@ -534,6 +635,13 @@ def run():
             screen.blit(player_icon, img_rect)
         else:
             pygame.draw.ellipse(screen, BLUE, prect)
+        # Path highlight (draw after player icon so outline stands out)
+        if path_highlight:
+            for (hx, hy) in path_highlight:
+                if (hx, hy) == (px, py):
+                    continue
+                hrect = pygame.Rect(hx*CELL_SIZE+36, hy*CELL_SIZE+36, CELL_SIZE-72, CELL_SIZE-72)
+                pygame.draw.rect(screen, (50,140,220), hrect, 4, border_radius=10)
         # Draw room type text
         type_abbr = {
             "enemy_lair": "EN",
@@ -1099,6 +1207,17 @@ def run():
             while pygame.mouse.get_pressed()[0]:
                 pygame.event.pump()
 
+        # Auto-execute next queued path direction when idle
+        if not pending_command and path_queue:
+            next_dir = path_queue.pop(0)
+            pending_command = f"[BRIEF] move {next_dir}"
+            waiting = True
+            waiting_dots = 0
+            waiting_start_time = time.time()
+            if not path_queue:
+                path_highlight = []
+                path_target_room = None
+
         # Process any pending command (no need for separate waiting flag gating)
         if pending_command:
             # Detect if user was at bottom before adding new lines
@@ -1302,6 +1421,9 @@ def run():
                 state = move_non_boss_enemies(state, GRID_W, GRID_H)
                 while count_non_boss_enemies(state) < 2:
                     state = spawn_enemy(state, enemy_sprites)
+                # If movement failed (location unchanged), clear queued path
+                if state.player.location == prev_location:
+                    path_queue.clear(); path_highlight.clear(); path_target_room = None
             # Flash if entered a room with enemies
             new_room = state.rooms.get(state.player.location, {})
             if state.player.location != prev_location and new_room.get("enemies"):

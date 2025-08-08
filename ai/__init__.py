@@ -227,30 +227,36 @@ def call_openai(state: GameState, cmd: str, model: str, roll_result: int | None 
                 if brace_depth <= 0:
                     json_block = False
                 continue
-            # Remove dot-notation debug state lines like player.location: xxx or rooms.room_2.visited: true
-            # Arrow or colon style debug lines
+            # Remove dot-notation / bullet debug lines (colon or arrow) & generic bullet state change summaries
             if ':' in ln or '->' in ln:
-                # Direct dot-notation at start
-                if low.startswith('player.') or low.startswith('rooms.'):
-                    continue
-                # Bullet style: '- player.location: ...' or '- rooms.room_2.visited: true'
                 stripped = ln.lstrip()
-                if stripped.startswith('-'):
-                    bullet_body = stripped[1:].lstrip()
-                    body_low = bullet_body.lower()
-                    if body_low.startswith('player.') or body_low.startswith('rooms.'):
+                bullet = stripped.startswith('-')
+                # Raw dot notation
+                if low.startswith(('player.','rooms.')):
+                    continue
+                # Bullet style
+                if bullet:
+                    bullet_body = stripped[1:].lstrip().lower()
+                    if any(bullet_body.startswith(prefix) for prefix in ('player.','rooms.','turn','hp','xp','the chamber','the next chamber')):
                         continue
-                    # Arrow variant '- player.location -> ...'
-                    if ('player.' in body_low or 'rooms.' in body_low) and '->' in body_low:
+                    if any(kw in bullet_body for kw in ('visited','location','enemies','state','->')):
                         continue
-                # After room id substitution we may get spaces inside like 'rooms.the chamber.visited:'
-                if 'player.location:' in low:
+                # Inline player / rooms refs after substitution
+                if any(tok in low for tok in ('player.location:','player.location ->')):
                     continue
-                if 'rooms.' in low and '.visited' in low:
+                if 'rooms.' in low and ('.visited' in low or ' visited' in low):
                     continue
-                # Arrow substitution variant e.g. rooms.the chamber.visited -> true
-                if 'rooms.' in low and '.visited' in low and '->' in low:
+                if 'rooms.' in low and '->' in low:
                     continue
+            # Generic bullet debug like '- turn:' or '- something enemies:'
+            stripped2 = ln.lstrip()
+            if stripped2.startswith('-'):
+                body = stripped2[1:].strip().lower()
+                if any(body.startswith(k) for k in ('turn','hp','xp','player','rooms')) or any(k in body for k in ('enemies','visited','location','state updated','status updated')):
+                    continue
+            # Remove trailing narrative end markers
+            if low.startswith('narrative end'):
+                continue
             cleaned.append(ln)
         # Trim leading/trailing empty lines
         while cleaned and not cleaned[0].strip():
@@ -524,7 +530,8 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
     """Process a player command and merge the resulting state changes."""
     global autoroll_enabled, pending_advantage
     old_location = state.player.location if hasattr(state.player, 'location') else None
-    if cmd.startswith("/"):
+    # Treat /hint as a special case that should go to the model (to produce options)
+    if cmd.startswith("/") and not cmd.lower().startswith('/hint'):
         # Meta command time advancement rules:
         # - /save and /load do not advance time
         # - /ability only advances time if the ability actually fires (not while recharging)
@@ -555,34 +562,94 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
     hint_mode = cmd.lower().startswith('/hint')
     # Remove the /hint token from the command sent to the model for cleaner language understanding
     model_cmd = cmd[5:].strip() if hint_mode else cmd
+    if hint_mode and not model_cmd:
+        model_cmd = 'hint'
     # For engine-side logic (movement detection etc.) we need a version without the [BRIEF] tag
     logic_cmd = model_cmd.replace('[BRIEF]', '').replace('[brief]', '').strip()
     # Natural language commands always advance time
     _tick_time(state, True)
+    # --- Door / lock interaction (pre-movement) ---
+    lower_logic_cmd = logic_cmd.lower()
+    # Build adjacency map for potential directional references
+    try:
+        cx, cy = state.rooms[state.player.location]["coords"]
+        dir_vecs = {"north": (0,-1), "south": (0,1), "east": (1,0), "west": (-1,0)}
+        coord_to_id = {tuple(r["coords"]): rid for rid, r in state.rooms.items()}
+    except Exception:
+        dir_vecs = {}
+        coord_to_id = {}
+    # Detect unlock intent
+    unlock_intent = any(w in lower_logic_cmd for w in ["unlock","open","use key","pick lock","pick the lock"])
+    chosen_unlock_dir = None
+    if unlock_intent:
+        for d in dir_vecs:
+            if f" {d}" in lower_logic_cmd or f" {d} door" in lower_logic_cmd:
+                chosen_unlock_dir = d
+                break
+        # If no explicit direction and exactly one adjacent locked door, pick it
+        if not chosen_unlock_dir:
+            locked_dirs = []
+            for d,(dx,dy) in dir_vecs.items():
+                tgt_id = coord_to_id.get((cx+dx, cy+dy))
+                if tgt_id and state.rooms[tgt_id].get('locked'):
+                    locked_dirs.append(d)
+            if len(locked_dirs) == 1:
+                chosen_unlock_dir = locked_dirs[0]
+        if chosen_unlock_dir:
+            dx, dy = dir_vecs[chosen_unlock_dir]
+            tgt_id = coord_to_id.get((cx+dx, cy+dy))
+            if tgt_id and state.rooms[tgt_id].get('locked'):
+                # Require a key (any inventory item containing 'key') OR explicit pick lock phrase
+                has_key = any('key' in it.lower() for it in state.player.inventory)
+                picking = 'pick' in lower_logic_cmd or 'lockpick' in lower_logic_cmd
+                if has_key or picking:
+                    state.rooms[tgt_id]['locked'] = False
+                    # reflect in state_delta later
+                    # Prepend a small deterministic line so model knows door now open
+                    logic_cmd = logic_cmd + f" (door {chosen_unlock_dir} unlocked)"
+                else:
+                    # Insert failure notice if no key and not picking
+                    logic_cmd = logic_cmd + " (you lack a key to unlock the door)"
     # --- Engine-side movement resolution (pre-model) ---
     lower_logic_cmd = logic_cmd.lower()
     tokens = lower_logic_cmd.split()
     engine_prev_location = state.player.location
     engine_moved = False
-    if tokens and tokens[0] in {"move","go","walk","run"}:
-        if len(tokens) >= 2:
+    # Movement parsing (robust): supports
+    #   - Verb-first: go south / move east / run north
+    #   - Direction only: 'north'
+    #   - Embedded phrase: 'unlock the door and go south'
+    #   - Minor typo verb 'got'
+    movement_verbs = {"move","go","walk","run"}
+    directions_map = {"north": (0,-1), "south": (0,1), "east": (1,0), "west": (-1,0)}
+    direction = None
+    if tokens:
+        if tokens[0] in movement_verbs and len(tokens) >= 2 and tokens[1] in directions_map:
             direction = tokens[1]
-            deltas = {"north": (0,-1), "south": (0,1), "east": (1,0), "west": (-1,0)}
-            if direction in deltas:
-                dx, dy = deltas[direction]
-                try:
-                    cx, cy = state.rooms[state.player.location]["coords"]
-                    target = (cx + dx, cy + dy)
-                    coord_map = {tuple(r["coords"]): rid for rid, r in state.rooms.items()}
-                    target_id = coord_map.get(target)
-                    if target_id:
-                        tgt_room = state.rooms[target_id]
-                        if not tgt_room.get("locked"):
-                            state.player.location = target_id
-                            state.rooms[target_id]["visited"] = True
-                            engine_moved = True
-                except Exception:
-                    pass
+        elif tokens[0] in directions_map and len(tokens) == 1:
+            # single-word direction command
+            direction = tokens[0]
+        else:
+            # search embedded 'go <dir>' pattern
+            import re as _re
+            m = _re.search(r"\bgo (north|south|east|west)\b", lower_logic_cmd)
+            if m:
+                direction = m.group(1)
+    if direction:
+        dx, dy = directions_map[direction]
+        try:
+            cx, cy = state.rooms[state.player.location]["coords"]
+            target = (cx + dx, cy + dy)
+            coord_map = {tuple(r["coords"]): rid for rid, r in state.rooms.items()}
+            target_id = coord_map.get(target)
+            if target_id:
+                tgt_room = state.rooms[target_id]
+                if not tgt_room.get("locked"):
+                    state.player.location = target_id
+                    state.rooms[target_id]["visited"] = True
+                    engine_moved = True
+        except Exception:
+            pass
     auto_roll_summary = None
     # Determine if we should auto-roll (only if no explicit roll_result passed and autoroll is on and command is not a movement/basic look)
     def _is_movement_like(c: str) -> bool:
@@ -612,8 +679,10 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
         r1 = random.randint(1,20)
         roll_result = r1
         auto_roll_summary = f"[auto-roll] d20 => {r1} (attack)"
-    openai_resp = call_openai(state, model_cmd, model, roll_result, hint_mode=hint_mode)
-    narrative, state_delta = openai_resp["narrative"], openai_resp["state_delta"]
+    openai_resp = call_openai(state, model_cmd, model, roll_result, hint_mode=hint_mode) or {}
+    # Defensive access (model should always supply keys, but guard against malformed output)
+    narrative = openai_resp.get("narrative", "")
+    state_delta = openai_resp.get("state_delta") or {}
     # If movement was attempted but engine_moved is False, override misleading success narration
     if tokens and tokens[0] in {"move","go","walk","run","got"} and not engine_moved:
         narrative = f"You can't go {tokens[1] if len(tokens)>1 else ''} from here." if len(tokens)>1 else "You can't move that way." 
@@ -782,6 +851,8 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
             if ln.strip():
                 prev = ln
         return '\n'.join(out)
+    # Friendly name substitution for internal enemy ids
+    narrative = narrative.replace('dungeon_boss', 'dungeon boss')
     narrative = _dedup(narrative)
     dm_say(narrative)
     # Return the full OpenAI response dict, plus any modifications
