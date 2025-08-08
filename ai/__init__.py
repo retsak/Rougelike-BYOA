@@ -60,6 +60,7 @@ SYSTEM_PROMPT = (
     "ONLY provide an 'options' list (numbered suggestions) when the player explicitly requests a hint via the /hint command. "
     "Otherwise DO NOT include an 'options' list or numbered suggestions; just give immersive narrative and consequences. "
     "In combat you also refrain from enumerating options unless /hint was used; the client UI supplies action buttons. "
+    "Whenever the player shares a room with living enemies (state.rooms[current_location].enemies with hp>0), always acknowledge their presence briefly in narration (names / threat) unless the player action ignores them—in which case warn of consequences. "
     "A numeric 'roll_result' may be supplied by the engine; this is an actual d20 roll already made. Interpret it using standard d20 intuition: 1 = dramatic failure, 2-9 failure, 10-11 marginal, 12-18 success (degree scales), 19 strong success, 20 = critical success. NEVER ask the player to roll again for that action—resolve with this provided outcome. If no roll_result is provided, you may narrate setup or request for a roll implicitly through fiction but do NOT fabricate a roll. "
     "Never reveal hidden info or raw die rolls—only outcomes; don't print the number explicitly unless the player explicitly framed the action around the roll. "
     "Do NOT output internal bookkeeping like 'State changes:', JSON dumps, or '(state_delta)'. The player should only see story narration. "
@@ -183,7 +184,7 @@ def call_openai(state: GameState, cmd: str, model: str, roll_result: int | None 
         for ln in lines:
             low = ln.strip().lower()
             # Start of state changes block
-            if not skip_mode and (low.startswith('state changes:') or low.startswith('state updates:') or low.startswith('state delta:') or low.startswith('updates:')):
+            if not skip_mode and (low.startswith('state changes:') or low.startswith('state change:') or low.startswith('state updates:') or low.startswith('state delta:') or low.startswith('updates:')):
                 skip_mode = True
                 continue
             if skip_mode:

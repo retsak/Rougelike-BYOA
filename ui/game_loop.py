@@ -917,28 +917,29 @@ def run():
                 card_rect = pygame.Rect(card_x, card_y, card_w, card_h)
                 pygame.draw.rect(screen, (40,40,80), card_rect, border_radius=10)
                 pygame.draw.rect(screen, (130,130,200), card_rect, 2, border_radius=10)
-                ename = enemy['name'].replace('_',' ').title()
-                name_txt = output_font.render(ename, True, (230,230,255))
-                screen.blit(name_txt, (card_rect.x + 12, card_rect.y + 8))
-                # Sprite (if available)
+                # Reserve sprite area on left
+                sprite_area_w = 72
                 sprite_key = enemy.get('sprite')
                 if sprite_key and sprite_key in enemy_sprites:
                     spr = enemy_sprites[sprite_key]
                     srect = spr.get_rect()
-                    srect.top = card_rect.y + 6
-                    srect.right = card_rect.right - 8
+                    srect.left = card_rect.x + 8
+                    srect.centery = card_rect.centery
                     screen.blit(spr, srect)
                     enemy_target_rects.append((idx, srect))
                 else:
-                    # Fallback circle icon clickable
-                    circle_rect = pygame.Rect(card_rect.right - 60, card_rect.y + 6, 48, 48)
+                    circle_rect = pygame.Rect(card_rect.x + 12, card_rect.y + 12, 48, 48)
                     pygame.draw.ellipse(screen, (90,60,60), circle_rect)
                     enemy_target_rects.append((idx, circle_rect))
-                # HP bar
+                # Name & HP to right of sprite area
+                text_x = card_rect.x + sprite_area_w
+                ename = enemy['name'].replace('_',' ').title()
+                name_txt = output_font.render(ename, True, (230,230,255))
+                screen.blit(name_txt, (text_x, card_rect.y + 6))
                 hp = max(0, enemy.get('hp',0))
                 max_hp = enemy.get('max_hp', hp if hp>0 else 1)
-                bar_w = card_w - 24
-                bar_rect_bg = pygame.Rect(card_rect.x + 12, card_rect.y + 36, bar_w, 16)
+                bar_w = card_w - (sprite_area_w + 24)
+                bar_rect_bg = pygame.Rect(text_x, card_rect.y + 40, bar_w, 16)
                 pygame.draw.rect(screen, (60,60,90), bar_rect_bg, border_radius=6)
                 pct = hp / max_hp if max_hp else 0
                 fg_w = int(bar_w * pct)
@@ -1021,7 +1022,6 @@ def run():
         # Draw Send button after stats panel so it's always visible
         send_btn_width, send_btn_height = 90, 44
         send_btn_rect = pygame.Rect(input_box.right - send_btn_width - 16, input_box.y + 10, send_btn_width, send_btn_height)
-        # No need to check overlap, input_box now ends before stats panel
         pygame.draw.rect(screen, (60, 120, 60), send_btn_rect, border_radius=10)
         pygame.draw.rect(screen, (120, 200, 120), send_btn_rect, 2, border_radius=10)
         send_txt = font.render("Send", True, (255,255,255))
@@ -1031,12 +1031,9 @@ def run():
         if dice_anim_active:
             elapsed = pygame.time.get_ticks() - dice_anim_start
             if elapsed < dice_anim_duration:
-                # Update interim number every 90ms
                 if (elapsed // 90) != ((elapsed - clock.get_time()) // 90):
                     dice_interim_number = random.randint(1, 20)
-                # Draw dice image centered
                 if dice_img:
-                    # gentle scale pulse
                     import math
                     pulse = 1.0 + 0.08 * math.sin(elapsed / 60.0)
                     base = dice_img
@@ -1044,7 +1041,6 @@ def run():
                     scaled = pygame.transform.smoothscale(base, (int(w * pulse), int(h * pulse)))
                     rect = scaled.get_rect(center=(WIDTH//2, HEIGHT//2 - 60))
                     screen.blit(scaled, rect)
-                # Number text (interim or final if decided)
                 show_num = dice_interim_number if dice_interim_number is not None else dice_result or 0
                 num_surf = font.render(str(show_num), True, (255, 255, 200))
                 screen.blit(num_surf, (WIDTH//2 - num_surf.get_width()//2, HEIGHT//2 - 60 - num_surf.get_height()//2))
@@ -1055,22 +1051,17 @@ def run():
                     scene_log.append(msg)
                     if len(scene_log) > 5000:
                         scene_log = scene_log[-5000:]
-                    # also append to combat log for convenience
                     combat_log.append(msg)
                     dice_result_posted = True
 
         pygame.display.flip()
-        # --- Adaptive frame cap ---
         now = time.time()
-        # Consider user idle if no input events recently & not waiting for AI
         idle = (now - last_activity_time) > 3 and not waiting
         target_fps = 60 if not idle else 40
-        # If a battle dialog or inventory is open, keep it smooth
         if battle_dialog or show_inventory_panel:
             target_fps = 60
         clock.tick(target_fps)
 
-    # Handle Send button click
         if pygame.mouse.get_pressed()[0]:
             mx, my = pygame.mouse.get_pos()
             # Tabs & search focus
@@ -1191,6 +1182,28 @@ def run():
                                 output_lines.append(lm)
                                 combat_log.append(lm)
                     pending_command = "attack"
+            # Perform attack BEFORE AI call so model can narrate outcome
+            pre_attack_msg_lines = []
+            if pending_command == 'attack' and in_combat:
+                room = state.rooms.get(state.player.location, {})
+                living = [e for e in room.get('enemies', []) if e.get('hp',0)>0]
+                if living:
+                    tgt = living[0]
+                    if 'target_enemy_index' in locals() and target_enemy_index is not None and target_enemy_index < len(living):
+                        tgt = living[target_enemy_index]
+                    atk_msg, roll_result_to_send = attack_enemy(state, tgt, screen, font)
+                    combat_log.append(atk_msg)
+                    pre_attack_msg_lines.extend(wrap_text(atk_msg, output_font, output_area.width-32))
+                    if tgt["hp"] <= 0:
+                        room["enemies"].remove(tgt)
+                        xp_gain = tgt.get("xp", 0)
+                        level_msgs = state.player.give_xp(xp_gain)
+                        defeat_msg = f"The {tgt['name'].replace('_', ' ')} is defeated! (+{xp_gain} XP)"
+                        pre_attack_msg_lines.append(defeat_msg)
+                        combat_log.append(defeat_msg)
+                        for lm in level_msgs:
+                            pre_attack_msg_lines.append(lm)
+                            combat_log.append(lm)
             try:
                 import io
                 import contextlib
@@ -1253,28 +1266,9 @@ def run():
                 else:
                     battle_options = None
                     battle_force_select = False
-                # If attack via quick button and target selected
-                if pending_command == 'attack' and in_combat:
-                    room = state.rooms.get(state.player.location, {})
-                    living = [e for e in room.get('enemies', []) if e.get('hp',0)>0]
-                    if living:
-                        tgt = living[0]  # fallback
-                        if 'target_enemy_index' in locals() and target_enemy_index is not None and target_enemy_index < len(living):
-                            tgt = living[target_enemy_index]
-                        atk_msg, roll_result_to_send = attack_enemy(state, tgt, screen, font)
-                        combat_log.append(atk_msg)
-                        for line in wrap_text(atk_msg, output_font, output_area.width-32):
-                            output_lines.append(line)
-                        if tgt["hp"] <= 0:
-                            room["enemies"].remove(tgt)
-                            xp_gain = tgt.get("xp", 0)
-                            level_msgs = state.player.give_xp(xp_gain)
-                            defeat_msg = f"The {tgt['name'].replace('_', ' ')} is defeated! (+{xp_gain} XP)"
-                            output_lines.append(defeat_msg)
-                            combat_log.append(defeat_msg)
-                            for lm in level_msgs:
-                                output_lines.append(lm)
-                                combat_log.append(lm)
+                # Append pre-attack messages (so player sees roll + outcome before AI narration if any)
+                for line in pre_attack_msg_lines:
+                    output_lines.append(line)
                 if auto_roll_summary:
                     output_lines.append(auto_roll_summary)
             except Exception as e:
