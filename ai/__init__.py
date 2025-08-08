@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 from dataclasses import asdict
 
 from openai import OpenAI
@@ -59,7 +60,9 @@ SYSTEM_PROMPT = (
     "ONLY provide an 'options' list (numbered suggestions) when the player explicitly requests a hint via the /hint command. "
     "Otherwise DO NOT include an 'options' list or numbered suggestions; just give immersive narrative and consequences. "
     "In combat you also refrain from enumerating options unless /hint was used; the client UI supplies action buttons. "
-    "Never reveal hidden info or raw die rolls—only outcomes. "
+    "A numeric 'roll_result' may be supplied by the engine; this is an actual d20 roll already made. Interpret it using standard d20 intuition: 1 = dramatic failure, 2-9 failure, 10-11 marginal, 12-18 success (degree scales), 19 strong success, 20 = critical success. NEVER ask the player to roll again for that action—resolve with this provided outcome. If no roll_result is provided, you may narrate setup or request for a roll implicitly through fiction but do NOT fabricate a roll. "
+    "Never reveal hidden info or raw die rolls—only outcomes; don't print the number explicitly unless the player explicitly framed the action around the roll. "
+    "Do NOT output internal bookkeeping like 'State changes:', JSON dumps, or '(state_delta)'. The player should only see story narration. "
     "Output JSON with at least: 'narrative' and 'state_delta'. If (and only if) /hint was used AND you have concrete helpful next steps, include an 'options' array of concise actionable strings (max 5). "
     "Do not include 'force_option_select' unless an unavoidable binary or multi-way mandatory choice blocks progress AND /hint was requested. "
     "Keep narration concise when movement-only unless detail was requested."
@@ -144,6 +147,64 @@ def call_openai(state: GameState, cmd: str, model: str, roll_result: int | None 
                 if not skipping:
                     lines.append(ln)
             data['narrative'] = '\n'.join(lines).strip()
+    # Additional sanitation: remove any 'State changes:' debug block & raw JSON dumps accidentally emitted
+    def _sanitize(narr: str) -> str:
+        if not narr:
+            return narr
+        lines = narr.split('\n')
+        cleaned = []
+        skip_mode = False
+        json_block = False
+        brace_depth = 0
+        for ln in lines:
+            low = ln.strip().lower()
+            # Start of state changes block
+            if not skip_mode and low.startswith('state changes:'):
+                skip_mode = True
+                continue
+            if skip_mode:
+                # end when blank line encountered
+                if not ln.strip():
+                    skip_mode = False
+                continue
+            # Skip lines that look like explicit '(state_delta)' marker
+            if low.startswith('(state_delta)'):
+                continue
+            # Remove leading 'narrative:' label if model echoed it
+            if low.startswith('narrative:'):
+                # Drop the label but keep the remainder after colon
+                after = ln.split(':',1)[1].lstrip() if ':' in ln else ''
+                if after:
+                    cleaned.append(after)
+                continue
+            # Remove lines starting with 'state_delta:' and any inline JSON that follows
+            if low.startswith('state_delta:'):
+                # Attempt to detect inline JSON on same line; if braces start here, suppress until balanced
+                idx = ln.find('{')
+                if idx != -1:
+                    json_block = True
+                    brace_depth = ln.count('{') - ln.count('}')
+                continue
+            # Detect raw JSON block heuristically: line starts with '{' and contains '"player"' or '"rooms"'
+            if not json_block and ln.strip().startswith('{') and ('"player"' in ln or '"rooms"' in ln):
+                json_block = True
+                # Track braces to know when to end
+                brace_depth = ln.count('{') - ln.count('}')
+                continue
+            if json_block:
+                brace_depth += ln.count('{') - ln.count('}')
+                if brace_depth <= 0:
+                    json_block = False
+                continue
+            cleaned.append(ln)
+        # Trim leading/trailing empty lines
+        while cleaned and not cleaned[0].strip():
+            cleaned.pop(0)
+        while cleaned and not cleaned[-1].strip():
+            cleaned.pop()
+        return '\n'.join(cleaned)
+    if isinstance(data, dict) and 'narrative' in data:
+        data['narrative'] = _sanitize(data.get('narrative', ''))
     return data
 
 
@@ -152,7 +213,7 @@ def get_api_call_counter() -> int:
     return api_call_counter
 
 
-META_CMDS = {"/save", "/load", "/quit", "/exit", "/stats", "/inventory", "/look", "/loot", "/map", "/help", "/ability", "/detail", "/equip", "/use", "/skipvoice", "/voicevol", "/voicespeed"}
+META_CMDS = {"/save", "/load", "/quit", "/exit", "/stats", "/inventory", "/look", "/loot", "/map", "/help", "/ability", "/detail", "/equip", "/use", "/skipvoice", "/voicevol", "/voicespeed", "/autoroll", "/adv", "/dis", "/clearadv"}
 
 # Default cooldown turns for hero abilities (can be overridden per balance needs)
 ABILITY_COOLDOWNS = {
@@ -166,6 +227,10 @@ ABILITY_COOLDOWNS = {
 
 # Track a simple movement streak to compress repetitive corridor narration
 movement_streak: list[str] = []  # list of direction tokens
+
+# --- Auto-rolling & advantage state (engine-side, not persisted) ---
+autoroll_enabled: bool = False           # if True, non-movement natural language actions auto-roll a d20
+pending_advantage: str | None = None     # 'adv' | 'dis' | None (consumed on next auto-roll)
 
 
 def _tick_time(state: GameState, advance: bool = True) -> None:
@@ -186,6 +251,7 @@ def _tick_time(state: GameState, advance: bool = True) -> None:
 
 def handle_meta(cmd: str, state: GameState, save_file) -> bool:
     lc = cmd.lower()
+    global autoroll_enabled, pending_advantage
     if lc in {"/quit", "/exit"}:
         print("Goodbye!")
         return True
@@ -354,6 +420,30 @@ Available commands:
         else:
             print("Usage: /voicespeed <multiplier> (e.g. 1.2)\n")
         return True
+    if lc.startswith('/autoroll'):
+        parts = cmd.split()
+        if len(parts) == 1:
+            print(f"Auto-roll is {'ON' if autoroll_enabled else 'OFF'}. Use /autoroll on or /autoroll off.\n")
+        else:
+            toggle = parts[1].lower()
+            if toggle in {'on','off'}:
+                autoroll_enabled = (toggle == 'on')
+                print(f"[AutoRoll] {'Enabled' if autoroll_enabled else 'Disabled'}.\n")
+            else:
+                print("Usage: /autoroll on|off\n")
+        return True
+    if lc == '/adv':
+        pending_advantage = 'adv'
+        print("[AutoRoll] Next roll will have advantage.\n")
+        return True
+    if lc == '/dis':
+        pending_advantage = 'dis'
+        print("[AutoRoll] Next roll will have disadvantage.\n")
+        return True
+    if lc == '/clearadv':
+        pending_advantage = None
+        print("[AutoRoll] Advantage/disadvantage cleared.\n")
+        return True
     if lc.startswith("/equip"):
         parts = cmd.split(maxsplit=1)
         if len(parts) == 1:
@@ -377,6 +467,7 @@ Available commands:
 
 def handle_command(cmd: str, state: GameState, model: str, roll_result: int | None = None, save_file=None) -> dict:
     """Process a player command and merge the resulting state changes."""
+    global autoroll_enabled, pending_advantage
     old_location = state.player.location if hasattr(state.player, 'location') else None
     if cmd.startswith("/"):
         # Meta command time advancement rules:
@@ -411,6 +502,29 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
     model_cmd = cmd[5:].strip() if hint_mode else cmd
     # Natural language commands always advance time
     _tick_time(state, True)
+    auto_roll_summary = None
+    # Determine if we should auto-roll (only if no explicit roll_result passed and autoroll is on and command is not a movement/basic look)
+    def _is_movement_like(c: str) -> bool:
+        c = c.lower().strip()
+        return c.startswith(("move","go","walk","run","look","flee","attack"))
+    if roll_result is None and autoroll_enabled and not cmd.startswith('/') and not _is_movement_like(model_cmd):
+        # Perform auto-roll (with optional advantage/disadvantage)
+        r1 = random.randint(1,20)
+        chosen = r1
+        mode = 'single'
+        detail = f"d20 => {r1}"
+        if pending_advantage in {'adv','dis'}:
+            r2 = random.randint(1,20)
+            if pending_advantage == 'adv':
+                chosen = max(r1, r2)
+                mode = 'advantage'
+            else:
+                chosen = min(r1, r2)
+                mode = 'disadvantage'
+            detail = f"d20 ({r1}, {r2}) {mode} => {chosen}"
+            pending_advantage = None  # consume
+        roll_result = chosen
+        auto_roll_summary = f"[auto-roll] {detail}"
     openai_resp = call_openai(state, model_cmd, model, roll_result, hint_mode=hint_mode)
     narrative, state_delta = openai_resp["narrative"], openai_resp["state_delta"]
     # --- Memory: append to history ---
@@ -542,4 +656,6 @@ def handle_command(cmd: str, state: GameState, model: str, roll_result: int | No
     # Return the full OpenAI response dict, plus any modifications
     openai_resp["narrative"] = narrative
     openai_resp["state_delta"] = state_delta
+    if auto_roll_summary:
+        openai_resp["auto_roll_summary"] = auto_roll_summary
     return openai_resp

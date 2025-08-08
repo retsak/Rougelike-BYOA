@@ -99,6 +99,29 @@ def load_sfx():
                 pass
     return sfx
 
+def load_dice_assets():
+    """Load dice image and roll sound if present.
+    Returns (surface|None, sound|None).
+    """
+    dice_img = None
+    dice_snd = None
+    try:
+        # dice image expected under Assets/UI/dice.png (jpg removed)
+        ui_dir = BACKGROUND_DIR.parent / "UI"
+        img_path = ui_dir / "dice.png"
+        if img_path.exists():
+            dice_img = pygame.image.load(str(img_path)).convert_alpha()
+            dice_img = pygame.transform.smoothscale(dice_img, (96, 96))
+    except Exception:
+        dice_img = None
+    try:
+        snd_path = AUDIO_DIR / "dice.mp3"
+        if snd_path.exists():
+            dice_snd = pygame.mixer.Sound(str(snd_path))
+    except Exception:
+        dice_snd = None
+    return dice_img, dice_snd
+
 ROOM_TYPE_TO_LOOP_KEYS = {
     # Only musical / ambient loops here now; SFX removed
     "entrance": ["wizard-rider-enchanted-fantasy-orchestral-loop-379413"],

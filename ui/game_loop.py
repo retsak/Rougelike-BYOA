@@ -15,6 +15,7 @@ def run():
         load_ambient_loops,
         pick_loop_for_room,
     load_sfx,
+    load_dice_assets,
     )
     from config import AMBIENT_VOLUME
     from ui.gameplay import (
@@ -95,7 +96,7 @@ def run():
     was_at_bottom = True  # track whether user was at bottom before adding new lines
 
     # --- Action Buttons (meta commands) ---
-    action_labels = ["/look", "/loot", "/inventory", "/stats", "/ability", "/map", "/hint"]
+    action_labels = ["/look", "/loot", "/inventory", "/stats", "/ability", "/map", "/hint", "/roll"]
     action_button_rects = []  # populated each frame
     show_inventory_panel = False
     inventory_grid_rects = []  # (item, rect)
@@ -201,10 +202,20 @@ def run():
     backgrounds = load_backgrounds(WIDTH, HEIGHT)
     ambient_loops = load_ambient_loops()
     sfx = load_sfx()
+    dice_img, dice_snd = load_dice_assets()
     current_loop = None
     selected_bg = None
     parallax_offset = [0,0]
     parallax_speed = 0.2
+
+    # --- Dice Roll State ---
+    dice_anim_active = False
+    dice_anim_start = 0
+    dice_anim_duration = 1200  # ms total animation time
+    dice_result = None
+    dice_result_posted = False
+    dice_interim_number = None  # rapidly changing preview number
+    next_roll_result = None     # d20 result to feed into next natural-language action
 
     # --- Main Loop ---
     running = True
@@ -352,10 +363,20 @@ def run():
                                 voice.stop_all()
                             except Exception:
                                 pass
-                            pending_command = lbl
-                            waiting = True
-                            waiting_dots = 0
-                            waiting_start_time = time.time()
+                            # /roll is a local meta command (no AI call)
+                            if lbl == "/roll":
+                                if not dice_anim_active:  # ignore if already rolling
+                                    pending_command = lbl
+                                    waiting = False  # no AI wait
+                                    waiting_dots = 0
+                                    waiting_start_time = None
+                                else:
+                                    pending_command = None
+                            else:
+                                pending_command = lbl
+                                waiting = True
+                                waiting_dots = 0
+                                waiting_start_time = time.time()
                             # add to history
                             if not input_history or input_history[-1] != lbl:
                                 input_history.append(lbl)
@@ -710,7 +731,7 @@ def run():
             f"STR: {p.str}",
             f"DEX: {p.dex}",
             f"LVL: {p.level}",
-            f"XP: {p.xp}/{p.level*100}",
+            f"XP: {p.xp}/{p.level*100} ({p.xp_to_next()} to next)",
             "",
             "Inventory:",
         ]
@@ -973,6 +994,38 @@ def run():
         send_txt = font.render("Send", True, (255,255,255))
         screen.blit(send_txt, (send_btn_rect.centerx - send_txt.get_width()//2, send_btn_rect.centery - send_txt.get_height()//2))
 
+        # --- Dice Animation Overlay ---
+        if dice_anim_active:
+            elapsed = pygame.time.get_ticks() - dice_anim_start
+            if elapsed < dice_anim_duration:
+                # Update interim number every 90ms
+                if (elapsed // 90) != ((elapsed - clock.get_time()) // 90):
+                    dice_interim_number = random.randint(1, 20)
+                # Draw dice image centered
+                if dice_img:
+                    # gentle scale pulse
+                    import math
+                    pulse = 1.0 + 0.08 * math.sin(elapsed / 60.0)
+                    base = dice_img
+                    w, h = base.get_width(), base.get_height()
+                    scaled = pygame.transform.smoothscale(base, (int(w * pulse), int(h * pulse)))
+                    rect = scaled.get_rect(center=(WIDTH//2, HEIGHT//2 - 60))
+                    screen.blit(scaled, rect)
+                # Number text (interim or final if decided)
+                show_num = dice_interim_number if dice_interim_number is not None else dice_result or 0
+                num_surf = font.render(str(show_num), True, (255, 255, 200))
+                screen.blit(num_surf, (WIDTH//2 - num_surf.get_width()//2, HEIGHT//2 - 60 - num_surf.get_height()//2))
+            else:
+                dice_anim_active = False
+                if not dice_result_posted and dice_result is not None:
+                    msg = f"You rolled a {dice_result} (d20)."
+                    scene_log.append(msg)
+                    if len(scene_log) > 5000:
+                        scene_log = scene_log[-5000:]
+                    # also append to combat log for convenience
+                    combat_log.append(msg)
+                    dice_result_posted = True
+
         pygame.display.flip()
         # --- Adaptive frame cap ---
         now = time.time()
@@ -1042,6 +1095,33 @@ def run():
             prev_location = state.player.location
             roll_result_to_send = None
             output_lines = [f"> {pending_command}"]
+            # Local dice roll handling (no AI call)
+            if pending_command == "/roll":
+                if not dice_anim_active:
+                    dice_result = random.randint(1, 20)
+                    dice_result_posted = False
+                    dice_interim_number = None
+                    dice_anim_active = True
+                    dice_anim_start = pygame.time.get_ticks()
+                    next_roll_result = dice_result  # store for next action resolution
+                    if dice_snd:
+                        try:
+                            dice_snd.play()
+                        except Exception:
+                            pass
+                # Log the command echo only; result appended after animation
+                for ln in output_lines:
+                    scene_log.append(ln)
+                if len(scene_log) > 5000:
+                    scene_log = scene_log[-5000:]
+                output_scroll = 10**9
+                pending_command = None
+                waiting = False
+                continue
+            # If this is a natural language command and a stored roll exists, consume it
+            if not pending_command.startswith('/') and roll_result_to_send is None and next_roll_result is not None:
+                roll_result_to_send = next_roll_result
+                next_roll_result = None
             # Determine if this is a movement-like command to allow enemy movement/spawn
             cmd_lower_for_spawn = pending_command.lower()
             is_movement_cmd = any(cmd_lower_for_spawn.startswith(t) for t in ["move","go","walk","run","flee"]) or cmd_lower_for_spawn.startswith("[brief] move")
@@ -1067,10 +1147,15 @@ def run():
                             output_lines.append(line)
                         if target_enemy["hp"] <= 0:
                             room["enemies"].remove(target_enemy)
-                            state.player.give_xp(target_enemy.get("xp", 0))
-                            defeat_msg = f"The {target_enemy['name'].replace('_', ' ')} is defeated!"
+                            xp_gain = target_enemy.get("xp", 0)
+                            level_msgs = state.player.give_xp(xp_gain)
+                            defeat_msg = f"The {target_enemy['name'].replace('_', ' ')} is defeated! (+{xp_gain} XP)"
                             output_lines.append(defeat_msg)
                             combat_log.append(defeat_msg)
+                            # append XP / level up messages to scene & combat logs
+                            for lm in level_msgs:
+                                output_lines.append(lm)
+                                combat_log.append(lm)
                     pending_command = "attack"
             try:
                 import io
@@ -1087,6 +1172,7 @@ def run():
                     options = result.get('options', [])
                     force_option_select = result.get('force_option_select', False)
                     state_delta = result.get('state_delta', None)
+                    auto_roll_summary = result.get('auto_roll_summary')
                     if not options:
                         for line in narrative.split('\n'):
                             if line.strip().startswith(tuple(str(i)+'.' for i in range(1,10))):
@@ -1098,14 +1184,17 @@ def run():
                         options = parsed.get('options', [])
                         force_option_select = parsed.get('force_option_select', False)
                         state_delta = parsed.get('state_delta', None)
+                        auto_roll_summary = parsed.get('auto_roll_summary')
                         if not options:
                             for line in narrative.split('\n'):
                                 if line.strip().startswith(tuple(str(i)+'.' for i in range(1,10))):
                                     options.append(line.strip())
                     except Exception:
                         narrative = result
+                        auto_roll_summary = None
                 else:
                     narrative = "(No narrative returned)"
+                    auto_roll_summary = None
                 if state_delta and isinstance(state_delta, dict):
                     if 'player' in state_delta and isinstance(state_delta['player'], dict):
                         for k, v in state_delta['player'].items():
@@ -1130,6 +1219,8 @@ def run():
                 else:
                     battle_options = None
                     battle_force_select = False
+                if auto_roll_summary:
+                    output_lines.append(auto_roll_summary)
             except Exception as e:
                 output_lines.append(f"Error: {e}")
                 battle_options = None

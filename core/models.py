@@ -28,14 +28,33 @@ class Player:
         return self.hp > 0
 
     def give_xp(self, amount: int) -> None:
+        """Add XP and handle level ups. Returns list of event messages."""
+        messages: list[str] = []
         self.xp += amount
+        messages.append(f"You gain {amount} XP.")
+        # Level threshold: level * 100 (can be tuned later to exponential)
+        leveled = False
         while self.xp >= self.level * 100:
             self.xp -= self.level * 100
             self.level += 1
+            leveled = True
+            # Stat gains on level up
             self.hp += 5
             self.str += 1
             self.dex += 1
-            print(f"*** You reach level {self.level}! Stats increased. ***")
+            messages.append(f"*** You reach level {self.level}! (+5 HP, +1 STR, +1 DEX) ***")
+        if not leveled:
+            needed = self.level * 100 - self.xp
+            messages.append(f"{needed} XP to level {self.level + 1}.")
+        for m in messages:
+            try:
+                print(m)
+            except Exception:
+                pass
+        return messages
+
+    def xp_to_next(self) -> int:
+        return self.level * 100 - self.xp
 
     # ---- Equipment & Items ----
     @staticmethod
