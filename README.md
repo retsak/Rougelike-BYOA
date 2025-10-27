@@ -78,11 +78,23 @@ tests/test_dungeon_generation.py  Basic generation test
    $env:OPENAI_API_KEY="sk-..."
    ```
    Or export in bash: `export OPENAI_API_KEY=sk-...`
-5. Launch:
+5. Launch (desktop roguelike):
    ```bash
    python play.py
    ```
 6. Select a hero. Type natural language or use meta commands. Enjoy.
+
+### Web edition (experimental)
+
+A streamlined, animated web build lives in `web/`. It focuses on collaborative
+storytelling with a lightweight procedural "AI" narrator.
+
+```bash
+uvicorn web.app:app --reload
+```
+
+Open <http://localhost:8000> to craft a hero, watch animated avatars float on a
+glowing card, and guide the shared story beat by beat.
 
 ## 6. Controls & Input
 | Action | Method |
