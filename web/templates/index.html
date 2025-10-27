@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DungeonGPT Web</title>
+    <link rel="stylesheet" href="/static/css/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-header">
+        <h1>DungeonGPT: Web Journey</h1>
+        <p class="tagline">Collaborate with an AI guide to weave a personalised tale.</p>
+      </header>
+      <main class="app-main">
+        <section class="character-builder" id="builder">
+          <h2>Create your hero</h2>
+          <form id="start-form">
+            <label for="name">Name</label>
+            <input type="text" id="name" name="name" placeholder="Lyra" required />
+            <label for="archetype">Archetype</label>
+            <input type="text" id="archetype" name="archetype" placeholder="Starlit Ranger" required />
+            <label for="trait">Signature trait</label>
+            <input type="text" id="trait" name="trait" placeholder="Fearless" required />
+            <button type="submit" class="btn primary">Begin adventure</button>
+          </form>
+        </section>
+        <section class="story-panel hidden" id="story-panel">
+          <div class="hero-card">
+            <div class="hero-avatar" id="hero-avatar">
+              <div class="hero-sprite"></div>
+              <div class="companion-sprite"></div>
+            </div>
+            <div class="hero-meta">
+              <h2 id="hero-name"></h2>
+              <p id="hero-details"></p>
+              <p id="hero-companion"></p>
+            </div>
+          </div>
+          <div class="story-log" id="story-log"></div>
+          <form id="action-form" class="action-form">
+            <input type="text" id="action" name="action" placeholder="Describe your next move..." autocomplete="off" />
+            <button type="submit" class="btn">Send</button>
+            <button type="button" class="btn ghost" id="reset-btn">Restart</button>
+          </form>
+        </section>
+      </main>
+      <footer class="app-footer">
+        <p>Animated, collaborative storytelling. Built for the browser.</p>
+      </footer>
+    </div>
+    <script src="/static/js/app.js" type="module"></script>
+  </body>
+</html>
